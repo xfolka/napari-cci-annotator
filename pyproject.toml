@@ -29,6 +29,7 @@ dependencies = [
     "magicgui",
     "qtpy",
     "scikit-image",
+    "ultralytics",
 ]
 
 [project.optional-dependencies]
