@@ -131,10 +131,10 @@ class CciAnnotatorQWidget(QWidget):
         self.ann_file_view.customContextMenuRequested.connect(self._show_context_menu)
                
         # #DEBUG STUFF!!!!
-        idir = "/home/xfolka/Projects/gisela_workflow/dl/myelin/images"
-        self.set_image_directory(idir, False)
-        adir = "/home/xfolka/Projects/gisela_workflow/dl/myelin/annotations"
-        self.set_ann_directory(adir)
+        # idir = "/home/xfolka/Projects/gisela_workflow/dl/myelin/images"
+        # self.set_image_directory(idir, False)
+        # adir = "/home/xfolka/Projects/gisela_workflow/dl/myelin/annotations"
+        # self.set_ann_directory(adir)
       
     def checkEnableLists(self):
         self.img_file_view.setEnabled(self.annDirSet and self.imgDirSet)
