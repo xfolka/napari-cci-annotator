@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING
 
 from magicgui import magic_factory
 from magicgui.widgets import CheckBox, Container, create_widget
-from qtpy.QtWidgets import QGridLayout, QMenu, QAction, QPushButton, QMessageBox, QWidget, QFileDialog, QLabel, QListView, QAbstractItemView
+from qtpy.QtWidgets import QGridLayout, QMenu, QAction, QPushButton, QCheckBox, QMessageBox, QWidget, QFileDialog, QLabel, QListView, QAbstractItemView
 from qtpy.QtCore import QModelIndex, QDir, Qt, QItemSelectionModel
 from skimage.util import img_as_float
 import napari_cci_annotator._image_handler as _image_handler
@@ -91,9 +91,14 @@ class CciAnnotatorQWidget(QWidget):
         
         self.auto_annotate_btn = QPushButton("Auto Annotate")
         self.auto_annotate_btn.clicked.connect(self._auto_annotate_clicked)
+        self.auto_annotate_btn.setEnabled(False)
+        
+        self.new_labels_check = QCheckBox()
         
         self.save_annotation_btn = QPushButton("Save Annotation")
         self.save_annotation_btn.clicked.connect(self._save_annotation_clicked)
+        self.save_annotation_btn.setEnabled(False)
+        
         
         self.layout().addWidget(self.start_ann_btn,3,0)
         self.layout().addWidget(QLabel("Starts annotation from the selected image (or first)\nWhen you are done with that image press next\nto start annotating the next image."),3,1)
@@ -106,6 +111,9 @@ class CciAnnotatorQWidget(QWidget):
         
         self.layout().addWidget(self.auto_annotate_btn,6,0)
         self.layout().addWidget(QLabel("Automatically annotates the current image."))
+
+        # self.layout().addWidget(self.new_labels_check,7,0)
+        # self.layout().addWidget(QLabel("Create new layer when auto annotating"))
         
         self.layout().addWidget(self.save_annotation_btn,7,0)
         self.layout().addWidget(QLabel("Saves the current annotation."))
@@ -126,14 +134,13 @@ class CciAnnotatorQWidget(QWidget):
         idir = "/home/xfolka/Projects/gisela_workflow/dl/myelin/images"
         self.set_image_directory(idir, False)
         adir = "/home/xfolka/Projects/gisela_workflow/dl/myelin/annotations"
-        #adir = "/home/xfolka/Projects/gisela_workflow/dl/myelin/auto_annotations"
         self.set_ann_directory(adir)
       
     def checkEnableLists(self):
         self.img_file_view.setEnabled(self.annDirSet and self.imgDirSet)
         self.ann_file_view.setEnabled(self.annDirSet and self.imgDirSet)
         
-        self.start_ann_btn.setEnabled(True)
+        self.start_ann_btn.setEnabled(self.annDirSet and self.imgDirSet)
             
     # def _setup_ann_menu(self):
     #     self.ann_menu = QMenu()
@@ -207,8 +214,10 @@ class CciAnnotatorQWidget(QWidget):
         
     def _dbl_click_image_file(self, index):
         self._remove_all_layers()
-        data = self.imgHandler.getImgData(index)
+        #data = self.imgHandler.getImgData(index)
         self.imgHandler.loadImageAndAnnotation(index,self.viewer)
+        self.save_annotation_btn.setEnabled(True)
+        self.auto_annotate_btn.setEnabled(True)
         
     def _select_image_and_corresponding_annotation(self,index):
         data = self.imgHandler.getImgData(index) 
@@ -223,23 +232,31 @@ class CciAnnotatorQWidget(QWidget):
         
         
     def _auto_annotate_clicked(self):
-        labels = self._get_first_labels_layer_if_any()
-        if not labels or np.all(labels.data == 0):
-            self.imgHandler.autoAnnotateImage(self.img_file_view.currentIndex(),self.viewer, labels)
-        else:
+        
+        self.imgHandler.autoAnnotateImage(self.img_file_view.currentIndex(),self.viewer)
+        
+    def _count_label_layers(self):
+        cnt = 0
+        for layer in self.viewer.layers:
+            if isinstance(layer, layers.Labels):
+                cnt+=1
+        return cnt
+           
+    def _save_only_one_layer(self):
+        if self._count_label_layers() > 1:
             QMessageBox.information(None, 
-                            "Non empty labels",
-                            "A non-empty labels layer already exists and auto annotate can not overwrite it.\nAn empty or no labels layer is fine.\nEither remove it or do manual annotation.",
-                            buttons = QMessageBox.Ok)
-            return
-                
+                        "More than one labels layer",
+                        "More than one labels layer exist.\nDelete all unwanted label layers and save again.",
+                        buttons = QMessageBox.Ok)
+            return False
+        
+        labels = self._get_first_labels_layer_if_any()
+        imgName = self.imgHandler.getImgData(self.img_file_view.currentIndex())
+        self.imgHandler.saveAnnotationUsingName(labels.name,imgName,self.viewer)
+        return True
            
     def _save_annotation_clicked(self):
-        labels = self._get_first_labels_layer_if_any()
-        if not labels:
-            return
-#        imgName = self.imgHandler.getImageLayerNameFromAnnotationName(labels.name)
-        self.imgHandler.saveAnnotationName(labels.name,self.viewer)
+        self._save_only_one_layer()
                 
     def _click_image_file(self, index):
         self._select_image_and_corresponding_annotation(index)
@@ -298,6 +315,8 @@ class CciAnnotatorQWidget(QWidget):
         self.done_ann_btn.setEnabled(True)
         self.img_file_view.setEnabled(False)
         self.ann_file_view.setEnabled(False)
+        self.save_annotation_btn.setEnabled(True)
+        self.auto_annotate_btn.setEnabled(True)
  
         if not self.img_file_view.currentIndex().isValid():
             self._select_first_items()
@@ -309,7 +328,10 @@ class CciAnnotatorQWidget(QWidget):
     
     def _next_annotation_clicked(self):
         
-        self.imgHandler.saveAnnotation(self.img_file_view.currentIndex(),self.viewer)
+        #self.imgHandler.saveAnnotation(self.img_file_view.currentIndex(),self.viewer)
+        if not self._save_only_one_layer():
+            return 
+        
         self._remove_all_layers()       
         
         nextIdx = self.imgHandler.nextImageIndex(self.img_file_view.currentIndex())
@@ -320,8 +342,8 @@ class CciAnnotatorQWidget(QWidget):
     
     def _done_annotation_clicked(self):
         
-        cIdx = self.img_file_view.currentIndex()
-        self.imgHandler.saveAnnotation(cIdx,self.viewer)
+        if not self._save_only_one_layer():
+            return 
         
         self.start_ann_btn.setEnabled(True)
         self.next_ann_btn.setEnabled(False)

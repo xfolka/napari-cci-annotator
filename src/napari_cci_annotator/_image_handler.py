@@ -77,6 +77,12 @@ class ImageHandler:
             ann = np.zeros(image_shape, dtype=current_image.dtype)
             
         napariViewer.add_labels(ann,name=self.getAnnotationLayerNameFromImageName(data))
+
+    def saveAnnotationUsingName(self, annLayerName, saveName, napariViewer):
+        annLayer = napariViewer.layers[annLayerName]
+        io.imsave(self.annFileModel.rootPath() + "/" + saveName, annLayer.data)
+        return True
+
     
     def saveAnnotationName(self, annName, napariViewer):
         annLayer = napariViewer.layers[annName]
@@ -139,7 +145,7 @@ class ImageHandler:
             all_masks = np.where(all_masks == 0, mask, all_masks)
 
         if labels_layer is None:
-            napariViewer.add_labels(all_masks,name=self.getAnnotationLayerNameFromImageName(img))
+            napariViewer.add_labels(all_masks,name="auto_"+self.getAnnotationLayerNameFromImageName(img))
         else:
             labels_layer.data = all_masks  # Update the existing layer's data
             labels_layer.refresh()  # Refresh the layer to reflect changes
