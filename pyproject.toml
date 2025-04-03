@@ -30,6 +30,10 @@ dependencies = [
     "qtpy",
     "scikit-image",
     "ultralytics",
+    "shapely",
+    "dask",
+    "xlsxwriter",
+    "openvino",
 ]
 
 [project.optional-dependencies]
@@ -43,7 +47,7 @@ testing = [
 ]
 
 [project.entry-points."napari.manifest"]
-napari-cci-annotator = "napari_cci_annotator:napari.yaml"
+ napari-cci-annotator = "napari_cci_annotator:napari.yaml"
 
 
 
@@ -58,8 +62,7 @@ include-package-data = true
 where = ["src"]
 
 [tool.setuptools.package-data]
-"*" = ["*.yaml"]
-
+"*" = ["*.yaml","models/**/*"]
 
 [tool.setuptools.dynamic]
 version = {attr = "napari_cci_annotator.__init__.__version__"}

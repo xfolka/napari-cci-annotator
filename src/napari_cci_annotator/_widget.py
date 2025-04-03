@@ -32,13 +32,18 @@ from typing import TYPE_CHECKING
 
 from magicgui import magic_factory
 from magicgui.widgets import CheckBox, Container, create_widget
-from qtpy.QtWidgets import QGridLayout, QMenu, QAction, QPushButton, QCheckBox, QMessageBox, QWidget, QFileDialog, QLabel, QListView, QAbstractItemView
-from qtpy.QtCore import QModelIndex, QDir, Qt, QItemSelectionModel
+from qtpy.QtWidgets import QGridLayout, QHBoxLayout, QVBoxLayout, QMenu, QAction, QSlider,QFormLayout, QPushButton, QCheckBox, QProgressDialog
+from qtpy.QtWidgets import QMessageBox, QWidget, QFileDialog, QLabel, QListView, QAbstractItemView, QTabWidget, QSpinBox, QMessageBox, QTableView
+from qtpy.QtCore import QModelIndex, QDir, Qt, QItemSelectionModel, Signal
 from skimage.util import img_as_float
 import napari_cci_annotator._image_handler as _image_handler
+import napari_cci_annotator._annotations_handler as _ann_handler
 from napari.utils.notifications import show_info
 from napari import layers
 import numpy as np
+import torch
+
+
 
 if TYPE_CHECKING:
     import napari
@@ -46,20 +51,168 @@ if TYPE_CHECKING:
 class CciAnnotatorQWidget(QWidget):
     # your QWidget.__init__ can optionally request the napari viewer instance
     # use a type annotation of 'napari.viewer.Viewer' for any parameter
+    
+    add_labels_signal = Signal(np.ndarray,str)
+    
     def __init__(self, viewer: "napari.viewer.Viewer"): 
         super().__init__()
         self.viewer = viewer
 
-        self.setLayout(QGridLayout())
+        self.NETWORK_IMG_SIZE = 1024
 
+        self.tabWidget = QTabWidget()
+        self.setLayout(QHBoxLayout())
+        self.layout().addWidget(self.tabWidget)
+        self.tabWidget.addTab(self._createFileListTab(),"Dataset")
+        self.tabWidget.addTab(self._createLargeImageAnnotateTab(),"Auto Annotate")
+        #self.tabWidget.addTab(self._createMetricsTab(),"Ann. Metrics")
+        self.tabWidget.addTab(self._createGridTab(),"Grid Generator")
+        self.tabWidget.currentChanged.connect(self._currentTabChanged)
+
+        self.annotationInProgress = False
+        self.imgHandler = _image_handler.ImageHandler()
+        self.img_file_view.setModel(self.imgHandler.getImgModel())
+        self.ann_file_view.setModel(self.imgHandler.getAnnModel())
+        
+        self.ann_handler = _ann_handler.AnnotationsHandler() 
+        #self.annotations_view.setModel(self.ann_handler.get_annotations_model())
+               
+        self.imgDirSet = False
+        self.annDirSet = False
+
+        #self._setup_ann_menu()
+        self.ann_file_view.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.ann_file_view.customContextMenuRequested.connect(self._show_context_menu)
+               
+        self.add_labels_signal.connect(self._add_labels_slot,Qt.QueuedConnection)
+
+        # #DEBUG STUFF!!!!
+        # idir = "/home/xfolka/Projects/gisela_workflow/dl/myelin/images"
+        # self.set_image_directory(idir, False)
+        # adir = "/home/xfolka/Projects/gisela_workflow/dl/myelin/annotations"
+        # self.set_ann_directory(adir)
+      
+    def _createMetricsTab(self):
+        mainWidget = QWidget()
+        mainLayout = QVBoxLayout()
+        mainWidget.setLayout(mainLayout)
+        
+        # img_btn = QPushButton("Select image dir")
+        # img_btn.clicked.connect(self._on_img_btn_click)
+        self.annotations_label = QLabel("No Annotations...")
+        mainLayout.addWidget(self.annotations_label)
+        
+        self.annotations_view = QTableView()
+        self.annotations_view.setEnabled(False)
+        mainLayout.addWidget(self.annotations_view)
+        self.annotations_view.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.annotations_view.setSelectionMode(QAbstractItemView.SingleSelection)
+
+
+        # mainLayout.addWidget(img_btn,0,0)
+        # mainLayout.addWidget(self.img_dir_label,1,0)
+
+        read_ann_btn = QPushButton("Read annotations")
+        read_ann_btn.clicked.connect(self._on_read_ann_btn_click)
+        
+        
+        # self.ann_dir_label = QLabel("None selected")
+        # self.ann_file_view = QListView()
+        # self.ann_file_view.setEnabled(False)
+        # self.ann_file_view.setSelectionMode(QAbstractItemView.SingleSelection)
+
+        mainLayout.addWidget(read_ann_btn)
+        self.annotations_view.clicked.connect(self._click_annotation_id)
+        
+        self.del_ann_btn = QPushButton("delete annotation")
+        #self.del_ann_btn.clicked.connect(self._del_annotation_clicked)
+        self.del_ann_btn.setEnabled(False)
+        mainLayout.addWidget(self.del_ann_btn)
+        
+        return mainWidget
+      
+    def _createGridTab(self):
+        mainWidget = QWidget()
+        layout = QGridLayout(mainWidget)
+        
+        layout.addWidget(QLabel(f"Neural Network Image Size {self.NETWORK_IMG_SIZE}"), 0, 0, 1, 2, Qt.AlignTop)
+        
+        self.grid_size_spinbox = QSpinBox()
+        self.grid_size_spinbox.setRange(100, 2000)
+        self.grid_size_spinbox.setValue(self.NETWORK_IMG_SIZE - (2 * self.overlap_slider.value()))
+        #self.cols_spinbox = QSpinBox()
+        #self.cols_spinbox.setRange(1, 100)
+
+        layout.addWidget(QLabel("Grid Size:"), 1, 0, Qt.AlignTop)
+        layout.addWidget(self.grid_size_spinbox, 1, 1, Qt.AlignTop)
+        #layout.addWidget(QLabel("Columns:"), 1, 0)
+        #layout.addWidget(self.cols_spinbox, 1, 1)
+
+        generate_button = QPushButton("Generate Grid")
+        generate_button.clicked.connect(self.generate_grid)
+        layout.addWidget(generate_button, 2, 0, 1, 2, Qt.AlignTop)
+        layout.setVerticalSpacing(10)
+         
+        return mainWidget
+      
+    def _createLargeImageAnnotateTab(self):
+        mainWidget = QWidget()
+        mainLayout = QVBoxLayout()
+        mainLayout.setSpacing(20)
+        mainWidget.setLayout(mainLayout)
+      
+      #  large_img_btn = QPushButton("Select Image")
+      #  mainLayout.addWidget(large_img_btn)
+        
+        sliderWidget = QWidget()
+        sliderLayout = QFormLayout(sliderWidget)
+        self.radius_slider = QSpinBox()
+        self.radius_slider.setMinimum(1)
+        self.radius_slider.setMaximum(20)
+        #radius_slider.setTickPosition(QSlider.TickBothSides)
+        sliderLayout.addRow("iso opening radius:", self.radius_slider)
+
+        self.overlap_slider = QSpinBox()
+        self.overlap_slider.setMinimum(20)
+        self.overlap_slider.setMaximum(400)
+        self.overlap_slider.setValue(200)
+        sliderLayout.addRow("Overlap:", self.overlap_slider)
+        mainLayout.addWidget(sliderWidget)
+        
+        self.large_img_btn = QPushButton("Start Annotation")
+        self.large_img_btn.clicked.connect(self._on_large_img_btn_clicked)
+        #large_img_btn.setEnabled(False)
+        mainLayout.addWidget(self.large_img_btn)
+        
+        self.morpho_btn = QPushButton("Morphometrics")
+        self.morpho_btn.clicked.connect(self._on_morphometrics_clicked)
+        #large_img_btn.setEnabled(False)
+        mainLayout.addWidget(self.morpho_btn)
+
+        self.backend_btn = QPushButton("Check AI Backend")
+        self.backend_btn.clicked.connect(self._on_backend_clicked)
+        #large_img_btn.setEnabled(False)
+        mainLayout.addWidget(self.backend_btn)
+
+        
+        mainLayout.insertStretch(-1,1)
+        
+      
+        return mainWidget
+      
+    def _createFileListTab(self):
+        mainWidget = QWidget()
+        mainLayout = QGridLayout()
+        mainWidget.setLayout(mainLayout)
+        
         img_btn = QPushButton("Select image dir")
         img_btn.clicked.connect(self._on_img_btn_click)
         self.img_dir_label = QLabel("None selected")
         self.img_file_view = QListView()
         self.img_file_view.setEnabled(False)
 
-        self.layout().addWidget(img_btn,0,0)
-        self.layout().addWidget(self.img_dir_label,1,0)
+        mainLayout.addWidget(img_btn,0,0)
+        mainLayout.addWidget(self.img_dir_label,1,0)
 
         ann_btn = QPushButton("Select annotations dir")
         ann_btn.clicked.connect(self._on_ann_btn_click)
@@ -68,11 +221,11 @@ class CciAnnotatorQWidget(QWidget):
         self.ann_file_view.setEnabled(False)
         self.ann_file_view.setSelectionMode(QAbstractItemView.SingleSelection)
 
-        self.layout().addWidget(ann_btn,0,1)
-        self.layout().addWidget(self.ann_dir_label,1,1)        
+        mainLayout.addWidget(ann_btn,0,1)
+        mainLayout.addWidget(self.ann_dir_label,1,1)        
 
-        self.layout().addWidget(self.img_file_view,2,0)
-        self.layout().addWidget(self.ann_file_view,2,1)
+        mainLayout.addWidget(self.img_file_view,2,0)
+        mainLayout.addWidget(self.ann_file_view,2,1)
         
         self.img_file_view.doubleClicked.connect(self._dbl_click_image_file)
         self.img_file_view.clicked.connect(self._click_image_file)
@@ -100,54 +253,74 @@ class CciAnnotatorQWidget(QWidget):
         self.save_annotation_btn.setEnabled(False)
         
         
-        self.layout().addWidget(self.start_ann_btn,3,0)
-        self.layout().addWidget(QLabel("Starts annotation from the selected image (or first)\nWhen you are done with that image press next\nto start annotating the next image."),3,1)
+        mainLayout.addWidget(self.start_ann_btn,3,0)
+        mainLayout.addWidget(QLabel("Starts annotation from the selected image (or first)\nWhen you are done with that image press next\nto start annotating the next image."),3,1)
 
-        self.layout().addWidget(self.next_ann_btn,4,0)
-        self.layout().addWidget(QLabel("Saves the annotated image and loads the next image and annotation."),4,1)
+        mainLayout.addWidget(self.next_ann_btn,4,0)
+        mainLayout.addWidget(QLabel("Saves the annotated image and loads the next image and annotation."),4,1)
 
-        self.layout().addWidget(self.done_ann_btn,5,0)
-        self.layout().addWidget(QLabel("Stops the annotation session (and saves the annotation)."),5,1)
+        mainLayout.addWidget(self.done_ann_btn,5,0)
+        mainLayout.addWidget(QLabel("Stops the annotation session (and saves the annotation)."),5,1)
         
-        self.layout().addWidget(self.auto_annotate_btn,6,0)
-        self.layout().addWidget(QLabel("Automatically annotates the current image."))
+        mainLayout.addWidget(self.auto_annotate_btn,6,0)
+        mainLayout.addWidget(QLabel("Automatically annotates the current image."))
 
-        # self.layout().addWidget(self.new_labels_check,7,0)
-        # self.layout().addWidget(QLabel("Create new layer when auto annotating"))
+        # mainLayout.addWidget(self.new_labels_check,7,0)
+        # mainLayout.addWidget(QLabel("Create new layer when auto annotating"))
         
-        self.layout().addWidget(self.save_annotation_btn,7,0)
-        self.layout().addWidget(QLabel("Saves the current annotation."))
+        mainLayout.addWidget(self.save_annotation_btn,7,0)
+        mainLayout.addWidget(QLabel("Saves the current annotation."))
+        
+        return mainWidget
 
-        self.annotationInProgress = False
-        self.imgHandler = _image_handler.ImageHandler()
-        self.img_file_view.setModel(self.imgHandler.getImgModel())
-        self.ann_file_view.setModel(self.imgHandler.getAnnModel())
-               
-        self.imgDirSet = False
-        self.annDirSet = False
+    def _currentTabChanged(self, index):
+        self.grid_size_spinbox.setValue(self.NETWORK_IMG_SIZE - (2 * self.overlap_slider.value()))
 
-        #self._setup_ann_menu()
-        self.ann_file_view.setContextMenuPolicy(Qt.CustomContextMenu)
-        self.ann_file_view.customContextMenuRequested.connect(self._show_context_menu)
-               
-        # #DEBUG STUFF!!!!
-        # idir = "/home/xfolka/Projects/gisela_workflow/dl/myelin/images"
-        # self.set_image_directory(idir, False)
-        # adir = "/home/xfolka/Projects/gisela_workflow/dl/myelin/annotations"
-        # self.set_ann_directory(adir)
+    def getRadius(self):
+        return self.radius_slider.value()
       
     def checkEnableLists(self):
         self.img_file_view.setEnabled(self.annDirSet and self.imgDirSet)
         self.ann_file_view.setEnabled(self.annDirSet and self.imgDirSet)
         
         self.start_ann_btn.setEnabled(self.annDirSet and self.imgDirSet)
+     
+     
+    def generate_grid(self):
+        
+        selected = self.viewer.layers.selection.active
+        if not selected:
+            return QMessageBox.information(None,"No layer selected","Select a layer to generate grid on")
             
-    # def _setup_ann_menu(self):
-    #     self.ann_menu = QMenu()
-    #     delAct = QAction("Delete")
-    #     delAct.triggered.connect(self._delete_annotation)
-    #     self.ann_menu.addAction(delAct)
-                
+        gridSize = self.grid_size_spinbox.value()
+        
+        # Define the size of the image
+        shape = selected.data.shape
+        height = shape[0]
+        width = shape[1]
+        
+
+        # Create a transparent RGBA image
+        grid = np.zeros((width,height, 4), dtype=np.uint8)  # (H, W, RGBA)
+
+        # Define red color for grid lines (R=255, G=0, B=0, A=255)
+        red_color = [255, 0, 0, 255]
+
+        cols = height // gridSize
+        rows = width // gridSize
+        # Draw horizontal lines
+        for row in range(rows):
+            r = row*gridSize
+            grid[r:r+3, :, :] = red_color
+
+        # Draw vertical lines
+        for col in range(cols):
+            c = col*gridSize
+            grid[:, c:c+3, :] = red_color
+
+        # Add the grid as a new image layer
+        self.viewer.add_image(grid, name=f"Grid {rows}x{cols}", rgb=True)
+               
     def _show_context_menu(self, qpoint):
         globalPos = self.ann_file_view.mapToGlobal(qpoint)
         index = self.ann_file_view.indexAt(qpoint)
@@ -205,6 +378,120 @@ class CciAnnotatorQWidget(QWidget):
         self.set_image_directory(img_dir)        
         show_info(f"Img dir: {img_dir} selected")
 
+    def _add_labels_slot(self, data, name_):
+        self.viewer.add_labels(data,name=name_)
+
+    def _on_large_img_btn_clicked(self):
+        radius = self.getRadius()
+        overlap = self.overlap_slider.value()
+        
+        import napari_cci_annotator._backend_detect as backend    
+        be, be_type = backend.select_backend()
+        
+        if not be:
+           QMessageBox.information(None,"No AI Backend  available","No AI backend available for annotation.")
+           return
+    
+        res, future = self.imgHandler.annotate_selected_layer(overlap,radius,self.viewer, be_type)
+        if not res:
+            #print("noipe")
+            QMessageBox.information(None,"No layer selected","Select a layer to segment first")
+            return
+        self.large_img_btn.setEnabled(False)
+        #start progress diablog
+        progDiag = QProgressDialog(f"Annotating image using {be_type} backend","Cancel",0,0)
+        progDiag.setWindowModality(Qt.WindowModal)
+        progDiag.show()
+
+        def callback(future):
+            progDiag.close()
+            self.large_img_btn.setEnabled(True)
+            #self.viewer.add_labels(future.result(),name=f"segmentation, rad: {radius}, overlap: {200}")
+            self.add_labels_signal.emit(future.result(),f"segmentation, rad: {radius}, overlap: {overlap}")
+            #stuff
+        future.add_done_callback(callback)
+
+    def _click_annotation_id(self, index):
+        coord = self.ann_handler.get_coordinates_for_row(index.row())
+        desired_coordinate = (0, coord[0], coord[1])
+        desired_zoom_level = 2
+
+        self.viewer.camera.center = desired_coordinate
+        self.viewer.camera.zoom = desired_zoom_level
+        return
+        
+
+    def _on_read_ann_btn_click(self):
+        if self._count_label_layers() > 1:
+            QMessageBox.information(None, 
+                        "More than one labels layer",
+                        "More than one labels exist.\nDelete all unwanted label layers and try again.",
+                        buttons = QMessageBox.Ok)
+            return False
+        label_layer = self._get_first_labels_layer_if_any()
+        self.ann_handler.clear_model()
+        self.ann_handler.add_annotations_to_model(label_layer.data, self.viewer)
+        if self.ann_handler.count() > 0:
+            self.annotations_view.setEnabled(True)
+
+
+    def _on_morphometrics_clicked(self):
+        print("Morpho here!!")
+        if self._count_label_layers() > 1 or self._count_image_layers() > 1:
+            QMessageBox.information(None, 
+                        "More than one labels or image layer",
+                        "More than one labels or image layer exist.\nDelete all unwanted layers and try again.",
+                        buttons = QMessageBox.Ok)
+            return False
+        label_layer = self._get_first_labels_layer_if_any()
+        image_layer = self._get_first_image_layer_if_any()
+        
+        xls_dir = QFileDialog.getExistingDirectory(caption = "Select morpho table directory")
+        if xls_dir == '':
+            return
+        show_info(f"Save excel file in dir: {xls_dir}")
+        fname = xls_dir + "/" + image_layer.name + "_morpho.xlsx"
+        future = self.imgHandler.calulate_morphometrics(fname,label_layer.data,image_layer.data)
+        
+        #start progress diablog
+        progDiag = QProgressDialog("working morphometrics...","Cancel",0,0)
+        progDiag.setWindowModality(Qt.WindowModal)
+        progDiag.show()
+
+        def callback(future):
+            progDiag.close()
+            if future.done():
+            # The task is completed
+                if future.exception() is not None:
+                    print(f"Task raised an exception: {future.exception()}")
+                    QMessageBox.warning(None, 
+                        "Exception during morphometrics",
+                        str(future.exception()),
+                        buttons = QMessageBox.Ok)
+                else:
+                    QMessageBox.warning(None, 
+                        "Morphometrics created",
+                        f"Morphometrics saved in: {fname}",
+                        buttons = QMessageBox.Ok)
+                    
+                    
+                    
+                    print(f"Task completed with result: {future.result()}")
+            else:
+                print("Task is not done yet")
+        
+        future.add_done_callback(callback)        
+        
+        
+    
+    def _on_backend_clicked(self):
+        import napari_cci_annotator._backend_detect as backend    
+        _, be_type = backend.select_backend()
+        QMessageBox.information(None,"Detected backend",f"Detected backend is: {be_type}")
+        # else:
+        #     QMessageBox.information(None,"GPU available","GPU available for annotation!")
+        
+
     def _on_ann_btn_click(self):
         ann_dir = QFileDialog.getExistingDirectory(caption = "Get annotation directory")
         if ann_dir == '':
@@ -230,6 +517,13 @@ class CciAnnotatorQWidget(QWidget):
                 return layer
         return None
         
+    def _get_first_image_layer_if_any(self):
+        for layer in self.viewer.layers:
+            if isinstance(layer, layers.Image):
+                return layer
+        return None
+
+
         
     def _auto_annotate_clicked(self):
         
@@ -241,6 +535,14 @@ class CciAnnotatorQWidget(QWidget):
             if isinstance(layer, layers.Labels):
                 cnt+=1
         return cnt
+
+    def _count_image_layers(self):
+        cnt = 0
+        for layer in self.viewer.layers:
+            if isinstance(layer, layers.Image):
+                cnt+=1
+        return cnt
+
            
     def _save_only_one_layer(self):
         if self._count_label_layers() > 1:

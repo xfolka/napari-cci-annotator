@@ -6,6 +6,9 @@ import os
 import numpy as np
 from ultralytics import YOLO
 import napari_cci_annotator._config as _config
+import concurrent.futures
+from .segment_large_image_using_yolo import segment_large_image_data
+from .morphometrics import create_morpho_table_from_data
 
 class ImageHandler:
     
@@ -18,6 +21,8 @@ class ImageHandler:
         
         self.imgRootIndex = QModelIndex()
         self.annRootIndex = QModelIndex()
+        
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=4) 
 
     def getImgModel(self):
         return self.imgFileModel
@@ -125,7 +130,8 @@ class ImageHandler:
     
     def autoAnnotateImage(self,imgIndx,napariViewer, labels_layer = None):
         rdir = os.path.dirname(os.path.realpath(__file__))
-        model_file_path = rdir + "/" +_config.MODELS_DIR + "/myelin/" + _config.MODEL_FILENAME
+        #model_file_path = rdir + "/" +_config.MODELS_DIR + "/myelin/" + _config.MODEL_FILENAME
+        model_file_path = rdir + "/" + _config.MYELIN_MODEL_PATH
         model = YOLO(model_file_path)
         img = self.getImgData(imgIndx)
         imgData = io.imread(self.imgFileModel.rootPath() + "/" + img)
@@ -150,6 +156,24 @@ class ImageHandler:
             labels_layer.data = all_masks  # Update the existing layer's data
             labels_layer.refresh()  # Refresh the layer to reflect changes
 
+    def annotate_selected_layer(self, overlap, radius, napariViewer, be_type):
+        
+        rdir = os.path.dirname(os.path.realpath(__file__))
+        if be_type.startswith(_config.OPENVINO_BACKEND_PREFIX):
+            model_file_path = rdir + '/' + _config.OPENVINO_MODEL_PATH        
+        else:
+            model_file_path = rdir + '/' + _config.MYELIN_MODEL_PATH
+        
+        model = YOLO(model_file_path, task='segment')
+        
+        selected = napariViewer.layers.selection.active
+        if not selected:
+            return False, None
+        # Submit the task to the executor and get a Future object
+        future = self.executor.submit(segment_large_image_data,model, selected.data, imgSize = 1024, over_lap=overlap, iso_radius=radius)
+        return True, future
+        
+
     def delete_annotation(self, index, napariViewer):
         annName = self.getAnnData(index)
         annLayerName = self.getAnnotationLayerNameFromImageName(annName)
@@ -157,3 +181,7 @@ class ImageHandler:
            annLayer = napariViewer.layers[annLayerName]
            napariViewer.layers.remove(annLayer)
         self.annFileModel.remove(index)
+
+    def calulate_morphometrics(self, name, label_layer, image_layer):
+        future = self.executor.submit(create_morpho_table_from_data, name, label_layer, image_layer)
+        return future
