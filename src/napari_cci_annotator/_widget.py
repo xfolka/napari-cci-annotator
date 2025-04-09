@@ -41,6 +41,7 @@ import napari_cci_annotator._annotations_handler as _ann_handler
 from napari.utils.notifications import show_info
 from napari import layers
 import numpy as np
+from functools import partial
 import torch
 
 
@@ -53,6 +54,8 @@ class CciAnnotatorQWidget(QWidget):
     # use a type annotation of 'napari.viewer.Viewer' for any parameter
     
     add_labels_signal = Signal(np.ndarray,str)
+    close_progress_signal = Signal()
+    
     
     def __init__(self, viewer: "napari.viewer.Viewer"): 
         super().__init__()
@@ -65,7 +68,7 @@ class CciAnnotatorQWidget(QWidget):
         self.layout().addWidget(self.tabWidget)
         self.tabWidget.addTab(self._createFileListTab(),"Dataset")
         self.tabWidget.addTab(self._createLargeImageAnnotateTab(),"Auto Annotate")
-        #self.tabWidget.addTab(self._createMetricsTab(),"Ann. Metrics")
+        self.tabWidget.addTab(self._createMetricsTab(),"Ann. Metrics")
         self.tabWidget.addTab(self._createGridTab(),"Grid Generator")
         self.tabWidget.currentChanged.connect(self._currentTabChanged)
 
@@ -75,7 +78,8 @@ class CciAnnotatorQWidget(QWidget):
         self.ann_file_view.setModel(self.imgHandler.getAnnModel())
         
         self.ann_handler = _ann_handler.AnnotationsHandler() 
-        #self.annotations_view.setModel(self.ann_handler.get_annotations_model())
+        self.annotations_view.setModel(self.ann_handler.get_annotations_model())
+        self.annotations_view.selectionModel().currentChanged.connect(self._on_ann_selection_changed)
                
         self.imgDirSet = False
         self.annDirSet = False
@@ -85,6 +89,11 @@ class CciAnnotatorQWidget(QWidget):
         self.ann_file_view.customContextMenuRequested.connect(self._show_context_menu)
                
         self.add_labels_signal.connect(self._add_labels_slot,Qt.QueuedConnection)
+        self.close_progress_signal.connect(self._close_progress_dialog, Qt.QueuedConnection)
+
+        self.progress_dialog = QProgressDialog("","",0,0)
+        self.progress_dialog.setAutoClose(True)
+        self.progress_dialog.reset()
 
         # #DEBUG STUFF!!!!
         # idir = "/home/xfolka/Projects/gisela_workflow/dl/myelin/images"
@@ -108,7 +117,6 @@ class CciAnnotatorQWidget(QWidget):
         self.annotations_view.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.annotations_view.setSelectionMode(QAbstractItemView.SingleSelection)
 
-
         # mainLayout.addWidget(img_btn,0,0)
         # mainLayout.addWidget(self.img_dir_label,1,0)
 
@@ -123,11 +131,17 @@ class CciAnnotatorQWidget(QWidget):
 
         mainLayout.addWidget(read_ann_btn)
         self.annotations_view.clicked.connect(self._click_annotation_id)
+        self.annotations_view.activated.connect(self._click_annotation_id)
         
         self.del_ann_btn = QPushButton("delete annotation")
-        #self.del_ann_btn.clicked.connect(self._del_annotation_clicked)
+        self.del_ann_btn.clicked.connect(self._del_annotation_clicked)
         self.del_ann_btn.setEnabled(False)
         mainLayout.addWidget(self.del_ann_btn)
+        
+        self.save_morpho_btn = QPushButton("Save Morpho xls")
+        self.save_morpho_btn.setEnabled(False)
+        self.save_morpho_btn.clicked.connect(self._save_morpho_xls)
+        mainLayout.addWidget(self.save_morpho_btn)
         
         return mainWidget
       
@@ -188,6 +202,8 @@ class CciAnnotatorQWidget(QWidget):
         self.morpho_btn.clicked.connect(self._on_morphometrics_clicked)
         #large_img_btn.setEnabled(False)
         mainLayout.addWidget(self.morpho_btn)
+        #self.morpho_btn.setVisible(False)
+
 
         self.backend_btn = QPushButton("Check AI Backend")
         self.backend_btn.clicked.connect(self._on_backend_clicked)
@@ -345,9 +361,6 @@ class CciAnnotatorQWidget(QWidget):
                 self.set_ann_directory(annPath)
         self.imgDirSet = True        
         
-        
-#        self.img_file_view.setCurrentIndex()
-        #self.img_file_view.setCurrentIndex(self.imgHandler.nextImageIndex(self.img_file_view.currentIndex()))
         self.checkEnableLists()
    
     def _delete_annotation(self,index):
@@ -381,6 +394,39 @@ class CciAnnotatorQWidget(QWidget):
     def _add_labels_slot(self, data, name_):
         self.viewer.add_labels(data,name=name_)
 
+    def _close_progress_dialog(self):
+        self.progress_dialog.reset()
+
+    def show_progress_dialog(self,label,cancel):
+        self.progress_dialog.setLabelText(label)
+        self.progress_dialog.setCancelButtonText(cancel)
+        self.progress_dialog.open()
+        
+        
+    def _future_done_callback(self, future, success_msg = None, error_msg = None, extra_func = None, show_exception = True):
+        self.close_progress_signal.emit()
+
+        # The task is completed
+        if future.done():
+            if future.exception() is not None and error_msg is not None:
+                err_msg = error_msg
+                if show_exception:
+                    err_msg += ": " + str(future.exception()) 
+                #print(f"Task raised an exception: {future.exception()}")
+                QMessageBox.warning(None, 
+                    "Exception during task",
+                    err_msg,
+                    buttons = QMessageBox.Ok)
+                
+            if future.exception() is None and success_msg is not None:
+                QMessageBox.information(None, 
+                    "Task finished",
+                    success_msg,
+                    buttons = QMessageBox.Ok)
+        
+            if extra_func:
+                extra_func()
+    
     def _on_large_img_btn_clicked(self):
         radius = self.getRadius()
         overlap = self.overlap_slider.value()
@@ -394,22 +440,18 @@ class CciAnnotatorQWidget(QWidget):
     
         res, future = self.imgHandler.annotate_selected_layer(overlap,radius,self.viewer, be_type)
         if not res:
-            #print("noipe")
             QMessageBox.information(None,"No layer selected","Select a layer to segment first")
             return
         self.large_img_btn.setEnabled(False)
-        #start progress diablog
-        progDiag = QProgressDialog(f"Annotating image using {be_type} backend","Cancel",0,0)
-        progDiag.setWindowModality(Qt.WindowModal)
-        progDiag.show()
 
-        def callback(future):
-            progDiag.close()
-            self.large_img_btn.setEnabled(True)
-            #self.viewer.add_labels(future.result(),name=f"segmentation, rad: {radius}, overlap: {200}")
+        onFinished = lambda: (
+            self.large_img_btn.setEnabled(True), 
             self.add_labels_signal.emit(future.result(),f"segmentation, rad: {radius}, overlap: {overlap}")
-            #stuff
-        future.add_done_callback(callback)
+        )
+        
+        f_cb = partial(self._future_done_callback, error_msg="Segmentation error", extra_func=onFinished)
+        future.add_done_callback(f_cb)
+        self.show_progress_dialog(f"Segmenting using {be_type}", "cancel")
 
     def _click_annotation_id(self, index):
         coord = self.ann_handler.get_coordinates_for_row(index.row())
@@ -419,21 +461,63 @@ class CciAnnotatorQWidget(QWidget):
         self.viewer.camera.center = desired_coordinate
         self.viewer.camera.zoom = desired_zoom_level
         return
+    
+    def _del_annotation_clicked(self):
+
+        labelindex = self.annotations_view.currentIndex()
+        label_to_delete = self.ann_handler.get_label_for_row(labelindex.row())
+
+        label_layer = self._get_first_labels_layer_if_any()
+        if not label_layer:
+            self.show_message_box("No labels layer","No labels layer available")
+            return False
+
+         #labels_layer = viewer.layers['my_labels_layer']
         
+        # Modify the layer's data to remove the specific label
+        label_layer.data[label_layer.data == label_to_delete] = 0
+        label_layer.data = label_layer.data
+        self.ann_handler.remove_row(labelindex.row())
+    
+    def _on_ann_selection_changed(self, selected, deselected):
+        self._click_annotation_id(selected)
+        
+    def _save_morpho_xls(self):
+        if self.ann_handler.count() == 0:
+            self.show_message_box("Empty","No data to save")
+            return
+        
+        fileName = QFileDialog.getSaveFileName(caption="Save File", directory="./morpho_report.xlsx", filter="*.xlsx")
+        self.ann_handler.generate_xls_report(fileName[0])
+
+    def show_message_box(self, title,msg):
+        QMessageBox.information(None, title,msg,buttons = QMessageBox.Ok)
 
     def _on_read_ann_btn_click(self):
         if self._count_label_layers() > 1:
-            QMessageBox.information(None, 
-                        "More than one labels layer",
-                        "More than one labels exist.\nDelete all unwanted label layers and try again.",
-                        buttons = QMessageBox.Ok)
+            self.show_message_box("More than one labels layer","More than one labels exist.\nDelete all unwanted label layers and try again.")
             return False
+        
         label_layer = self._get_first_labels_layer_if_any()
-        self.ann_handler.clear_model()
-        self.ann_handler.add_annotations_to_model(label_layer.data, self.viewer)
-        if self.ann_handler.count() > 0:
-            self.annotations_view.setEnabled(True)
+        if not label_layer:
+            self.show_message_box("No labels layer","No labels layer available")
+            return False
+        
+        image_layer = self._get_first_image_layer_if_any()
+        if not image_layer:
+            self.show_message_box("No image layer","No image layer available")
+            return False
+        
+        future = self.ann_handler.add_annotations_to_model(label_layer.data, image_layer.data, self.viewer)
 
+        onFinished = lambda: (
+            self.annotations_view.setEnabled(self.ann_handler.count() > 0),
+            self.del_ann_btn.setEnabled(True)
+        )
+        
+        f_cb = partial(self._future_done_callback, extra_func=onFinished)
+        future.add_done_callback(f_cb)
+        self.show_progress_dialog("Adding annotations...","cancel")
 
     def _on_morphometrics_clicked(self):
         print("Morpho here!!")
@@ -454,34 +538,9 @@ class CciAnnotatorQWidget(QWidget):
         future = self.imgHandler.calulate_morphometrics(fname,label_layer.data,image_layer.data)
         
         #start progress diablog
-        progDiag = QProgressDialog("working morphometrics...","Cancel",0,0)
-        progDiag.setWindowModality(Qt.WindowModal)
-        progDiag.show()
-
-        def callback(future):
-            progDiag.close()
-            if future.done():
-            # The task is completed
-                if future.exception() is not None:
-                    print(f"Task raised an exception: {future.exception()}")
-                    QMessageBox.warning(None, 
-                        "Exception during morphometrics",
-                        str(future.exception()),
-                        buttons = QMessageBox.Ok)
-                else:
-                    QMessageBox.warning(None, 
-                        "Morphometrics created",
-                        f"Morphometrics saved in: {fname}",
-                        buttons = QMessageBox.Ok)
-                    
-                    
-                    
-                    print(f"Task completed with result: {future.result()}")
-            else:
-                print("Task is not done yet")
-        
-        future.add_done_callback(callback)        
-        
+        self.show_progress_dialog("working morphometrics...","Cancel")
+        f_cb = partial(self._future_done_callback, success_msg=f"Morphometrics saved in: {fname}", error_msg="Exception during morphometrics")
+        future.add_done_callback(f_cb)        
         
     
     def _on_backend_clicked(self):

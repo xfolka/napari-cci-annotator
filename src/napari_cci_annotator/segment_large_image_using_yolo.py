@@ -70,27 +70,30 @@ def calculate_dynamic_overlap(large_image_size, ann_size):
     
     return overlap_to_distribute/2
 
-def merge_border_segments(data, block_id, img_size, scan_vertical, scan_far_side = False):
+def caclulate_neighbour_equivalence_ids(data, block_id, img_size, scan_vertical, scan_far_side = False):
     
-    if data.shape[0] <= img_size and scan_vertical:
-        return data
-    if data.shape[1] <= img_size and not scan_vertical:
-        return data
+    # if data.shape[0] <= img_size and scan_vertical:
+    #     return data
+    # if data.shape[1] <= img_size and not scan_vertical:
+    #     return data
 
-    print(f"computing chunk {block_id}")
-    x = 1 if not scan_far_side else img_size
-    y = 1 if not scan_far_side else img_size
+    print(f"calulating eq ids from {block_id}")
+    x = 1 if not scan_far_side else data.shape[0] #img_size
+    y = 1 if not scan_far_side else data.shape[1]
     
     neighbour_mod = -1 if not scan_far_side else 1
     
     if scan_vertical: 
         neighbour_coords_mod =  (neighbour_mod,0)#(border_distance,0)
+        scan_size = data.shape[1]
     else:
         neighbour_coords_mod =  (0,neighbour_mod)#(0,border_distance)
+        scan_size = data.shape[0]
 
     connected_table = defaultdict(lambda: defaultdict(int))
     max_neighbour_local_table = defaultdict(lambda: defaultdict(int))
-    for coord in range(img_size):
+    #for coord in range(img_size):
+    for coord in range(scan_size):
         if scan_vertical:
             y = coord 
         else:
@@ -134,7 +137,7 @@ def merge_border_segments(data, block_id, img_size, scan_vertical, scan_far_side
         id_l = l
         id_n = n
         tableOfIds.add_eqvivalence_pair(id_l,id_n)
-        print(f"Adding equivalent ids: {id_l} {id_n} {block_id}")
+        #print(f"Adding equivalent ids: {id_l} {id_n} {block_id}")
         # print(f"merging with id: {id_l} {id_n} {block_id} {scan_vertical}")
         # idxs = np.where(data == id_l)
         # data[idxs] = id_n
@@ -176,37 +179,38 @@ def find_and_change_ids_along_border(data, block_info = None):
 @da.delayed
 def segment_with_yolo(model, data, dimension):
     input_data = np.ascontiguousarray(data)
-    results = model(source=input_data, imgsz=dimension)
+    results = model(source=input_data, imgsz=dimension,verbose=False)
     return results
 
 def segment_wrapper(model, dimension, data, block_id):
+    #data.resize((dimension,dimension),refcheck=False)
     with model_mutex:
-        print(f"computing chunk {block_id}, {data.shape}")
-
+        print(f"segment chunk {block_id}, {data.shape}, {dimension}")
         rgb_data = skimage.color.gray2rgb(data)
-        
         result = segment_with_yolo(model,rgb_data,dimension)
         computed_result = result.compute()
              
-    all_masks = np.zeros(shape=(dimension,dimension), dtype=np.uint32)
+    #all_masks = np.zeros(shape=(dimension,dimension), dtype=np.uint32)
+    all_masks = np.zeros(shape=data.shape, dtype=np.uint32)
     if computed_result is None or computed_result[0].masks is None:
         return all_masks
     
     result_masks = computed_result[0].masks
     masks = result_masks.data.cpu().numpy()
-    shape = computed_result[0].masks.shape
+    segments = computed_result[0].masks.shape[0]
     
-    sh1 = shape[1]
-    sh2 = shape[2]
+    
+    sh1 = all_masks.shape[0]
+    sh2 = all_masks.shape[1]
     #tmp_id = intGen.getNext()
 
-    for n in range(shape[0]):
-        
+    print(f"all_mask shape {all_masks.shape}, segmented shape {segments}")
+    for n in range(segments):
         #res = skimage.morphology.binary_closing(masks[n])
         #res = skimage.morphology.diameter_closing(masks[n],diameter_threshold=5)
         res =masks[n]
         mask = res * intGen.getNext()
-        all_masks[:sh1, :sh2] = np.where(all_masks[:sh1, :sh2] == 0, mask, all_masks[:sh1, :sh2])
+        all_masks[:sh1, :sh2] = np.where(all_masks[:sh1, :sh2] == 0, mask[:sh1, :sh2], all_masks[:sh1, :sh2])
 
     
 
@@ -233,34 +237,18 @@ def segment_large_image_data(model, imageData, imgSize = 1024, over_lap = 100, i
     chunk_size =int(img_size - (2 * overlap))
 
     large_image = large_image_tmp.reshape((s[0],s[1])).rechunk((chunk_size,chunk_size,1))
-    #large_image = large_image_tmp.rechunk((chunk_size,chunk_size,1))
 
     bound_f = partial(segment_wrapper, model, img_size)
     segment_results = da.array.map_overlap(bound_f, large_image, dtype=np.uint32, chunks=(chunk_size,chunk_size) ,depth=overlap, boundary='reflect', trim=True, allow_rechunk=True)
 
-    # isoRadius = iso_radius#config.ISO_OPENING_RADIUS
-    # iso_opening_f = partial(isotrophic_opening, isoRadius)
-    # iso_opening_results = segment_results.map_blocks(iso_opening_f, dtype=np.uint32,chunks=(img_size,img_size))
-    
-    #area_radius = config.AREA_OPENING_RADIUS
-    #area_opening_f = partial(area_opening)
-    #area_opening_results = segment_results.map_blocks(area_opening, dtype=np.uint32,chunks=(chunk_size,chunk_size))
-
-    #dep ={0: (2,2),1: (2,2)}
     dep = 1
-    merge_horizontal = partial(merge_border_segments,img_size = chunk_size, scan_vertical = False)
-    #h1_result = area_opening_results.map_overlap(merge_horizontal,dtype=np.uint32,depth=dep, boundary="reflect", trim=True)
-    h1_result = segment_results.map_overlap(merge_horizontal,dtype=np.uint32,depth=dep, boundary="reflect", trim=True)
+    merge_horizontal = partial(caclulate_neighbour_equivalence_ids,img_size = chunk_size, scan_vertical = False)
+    h1_result = segment_results.map_overlap(merge_horizontal,dtype=np.uint32,depth=dep, boundary='reflect', trim=True, allow_rechunk=True)
 
-    # merge_horizontal = partial(merge_border_segments,img_size = chunk_size, scan_vertical = False, scan_far_side = True)
-    # h2_result = h1_result.map_overlap(merge_horizontal,dtype=np.uint32,depth=dep, boundary="reflect", trim=True)
+    merge_vertical = partial(caclulate_neighbour_equivalence_ids,img_size = chunk_size, scan_vertical = True)
+    v1_result = h1_result.map_overlap(merge_vertical,dtype=np.uint32,depth=dep, boundary='reflect', trim=True, allow_rechunk=True)
 
-    merge_vertical = partial(merge_border_segments,img_size = chunk_size, scan_vertical = True)
-    v1_result = h1_result.map_overlap(merge_vertical,dtype=np.uint32,depth=dep, boundary="reflect", trim=True)
-
-    # merge_vertical = partial(merge_border_segments,img_size = chunk_size, scan_vertical = True, scan_far_side = True)
-    # v2_result = v1_result.map_overlap(merge_vertical,dtype=np.uint32,depth=dep, boundary="reflect", trim=True)
-    res = v1_result.compute()
+    res = v1_result.compute(scheduler="threads")
 
     tableOfIds.group_ids()
 
@@ -270,8 +258,7 @@ def segment_large_image_data(model, imageData, imgSize = 1024, over_lap = 100, i
     overlap = over_lap#config.OVERLAP
     chunk_size =int(img_size - (2 * overlap))
     final_dask = new_dask_array.reshape((s[0],s[1])).rechunk((chunk_size,chunk_size,1))
-
-
+ 
     end_result = final_dask.map_blocks(find_and_change_ids_along_border,dtype=np.uint32)
 
     print("starting...")
