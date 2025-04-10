@@ -464,11 +464,14 @@ def create_morpho_table_from_data(name, label_image, data_image):
 #     # plt.show()
 
     total_table = pd.DataFrame()
+    tot_cnt = 0
     for data in morpho_data_generator(label_image,data_image):
         total_table = pd.concat([total_table, data], axis=0)
+        tot_cnt += 1
+        
 
     #print(f"done for index: {obj_idx}")
-    #print(f"Morphonetrics done. Tot: {totCnt}, open labels: {openCnt}")
+    print(f"Morphonetrics done. Tot: {tot_cnt}")
 
     #if index>=1:
     #    break
