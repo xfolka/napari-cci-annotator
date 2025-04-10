@@ -55,6 +55,7 @@ class CciAnnotatorQWidget(QWidget):
     
     add_labels_signal = Signal(np.ndarray,str)
     close_progress_signal = Signal()
+    show_result_dialog_signal = Signal(str, str)
     
     
     def __init__(self, viewer: "napari.viewer.Viewer"): 
@@ -89,7 +90,9 @@ class CciAnnotatorQWidget(QWidget):
         self.ann_file_view.customContextMenuRequested.connect(self._show_context_menu)
                
         self.add_labels_signal.connect(self._add_labels_slot,Qt.QueuedConnection)
+        self.show_result_dialog_signal.connect(self._show_result_dialog, Qt.QueuedConnection)
         self.close_progress_signal.connect(self._close_progress_dialog, Qt.QueuedConnection)
+        
 
         self.progress_dialog = QProgressDialog("","",0,0)
         self.progress_dialog.setAutoClose(True)
@@ -394,6 +397,13 @@ class CciAnnotatorQWidget(QWidget):
     def _add_labels_slot(self, data, name_):
         self.viewer.add_labels(data,name=name_)
 
+    def _show_result_dialog(self, title = None, msg = None):
+        
+        QMessageBox.information(None, 
+            title,
+            msg,
+            buttons = QMessageBox.Ok)
+        
     def _close_progress_dialog(self):
         self.progress_dialog.reset()
 
@@ -406,26 +416,22 @@ class CciAnnotatorQWidget(QWidget):
     def _future_done_callback(self, future, success_msg = None, error_msg = None, extra_func = None, show_exception = True):
         self.close_progress_signal.emit()
 
+        msg = success_msg
+        title = "Success"
         # The task is completed
         if future.done():
             if future.exception() is not None and error_msg is not None:
-                err_msg = error_msg
+                msg = error_msg
+                title = "Error during task"
                 if show_exception:
-                    err_msg += ": " + str(future.exception()) 
-                #print(f"Task raised an exception: {future.exception()}")
-                QMessageBox.warning(None, 
-                    "Exception during task",
-                    err_msg,
-                    buttons = QMessageBox.Ok)
+                    err_msg += ": " + str(future.exception())
                 
-            if future.exception() is None and success_msg is not None:
-                QMessageBox.information(None, 
-                    "Task finished",
-                    success_msg,
-                    buttons = QMessageBox.Ok)
-        
-            if extra_func:
-                extra_func()
+
+        if msg is not None:
+            self.show_result_dialog_signal.emit(title,msg)
+                
+        if extra_func:
+            extra_func()
     
     def _on_large_img_btn_clicked(self):
         radius = self.getRadius()
@@ -535,12 +541,12 @@ class CciAnnotatorQWidget(QWidget):
             return
         show_info(f"Save excel file in dir: {xls_dir}")
         fname = xls_dir + "/" + image_layer.name + "_morpho.xlsx"
-        future = self.imgHandler.calulate_morphometrics(fname,label_layer.data,image_layer.data)
         
         #start progress diablog
-        self.show_progress_dialog("working morphometrics...","Cancel")
         f_cb = partial(self._future_done_callback, success_msg=f"Morphometrics saved in: {fname}", error_msg="Exception during morphometrics")
-        future.add_done_callback(f_cb)        
+        future = self.imgHandler.calulate_morphometrics(fname,label_layer.data,image_layer.data)
+        future.add_done_callback(f_cb)
+        self.show_progress_dialog("working morphometrics...","Cancel")
         
     
     def _on_backend_clicked(self):
