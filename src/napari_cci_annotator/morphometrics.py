@@ -65,6 +65,28 @@ def get_box_with_rotation(bw_img, rot_mat):
     return contours, min_bbox_corners, box_dim
 
 
+def get_morphos_for_label(label,label_image, data_image):
+    lbl = np.where(label_image == label, label, 0)
+    properties = ['bbox','image']
+    reg_table = regionprops_table(label_image=label_image,
+                            properties=properties)
+    
+    if len(reg_table) == 0:
+        return None
+    
+    row = reg_table[0]
+    min_r = row['bbox-0']
+    min_c = row['bbox-1']
+    max_r = row['bbox-2']
+    max_c = row['bbox-3']
+
+    myelin_lbl = label_image[min_r:max_r,min_c:max_c]
+    myelin_bw = row['image']
+    img_data = data_image[min_r:max_r,min_c:max_c]
+    
+    return get_morphos_for_label_data(myelin_lbl,myelin_bw,img_data,label)
+    
+
 def morpho_data_generator(label_image, data_image):
     pad_size = 5
 
@@ -86,7 +108,7 @@ def morpho_data_generator(label_image, data_image):
 #with wk.webknossos_context(token=AUTH_TOKEN, timeout=WK_TIMEOUT):
     for index, row in reg_table.iterrows():
         #print(row)
-        obj_idx = row['label']
+        #obj_idx = row['label']
         totCnt += 1
     # bbox = skibbox2wkbbox(row.to_dict(), pSize)
     # img_data = img_layer.get_finest_mag().read(absolute_offset=bbox.topleft, size=bbox.size)
@@ -104,84 +126,109 @@ def morpho_data_generator(label_image, data_image):
         myelin_lbl = label_image[min_r:max_r,min_c:max_c]
         myelin_bw = row['image']
         img_data = data_image[min_r:max_r,min_c:max_c]
+        yield get_morphos_for_label_data(myelin_lbl,myelin_bw,img_data,row['label'])
         
-        # get area of the imge identified as myelin, this is my main ROI which defines behaviour of all others.
+        
+def get_morphos_for_label_data(myelin_lbl, myelin_bw, img_data, label):
+        
+    # get area of the imge identified as myelin, this is my main ROI which defines behaviour of all others.
 #        myelin_bw = morpho.get_BW_from_lbl(myelin_lbl, obj_idx)
-        # clean myelin label map, in case other neurons are close by
-        myelin_lbl[np.logical_not(myelin_bw)] = 0
+    # clean myelin label map, in case other neurons are close by
+    myelin_lbl[np.logical_not(myelin_bw)] = 0
 
-        properties = ['label','area','eccentricity','solidity','intensity_mean',
-                        'axis_minor_length','axis_major_length','feret_diameter_max']
-        props_table = regionprops_table(label_image=myelin_lbl,
-                                        intensity_image=img_data,
-                                        properties=properties)
-        obj_table = pd.DataFrame(props_table)
-        obj_table.rename(columns={'area': 'myelin_area', 
-                            'eccentricity': 'myelin_eccentricity',
-                            'solidity': 'myelin_solidity',
-                            'intensity_mean': 'myelin_intensity_mean',
-                            'axis_minor_length': 'myelin_axis_minor_length',
-                            'axis_major_length': 'myelin_axis_major_length',
-                            'feret_diameter_max': 'myelin_feret_diameter_max'}, inplace=True)
+    properties = ['label','area','eccentricity','solidity','intensity_mean',
+                    'axis_minor_length','axis_major_length','feret_diameter_max', 'centroid']
+    props_table = regionprops_table(label_image=myelin_lbl,
+                                    intensity_image=img_data,
+                                    properties=properties)
+    obj_table = pd.DataFrame(props_table)
+    obj_table.rename(columns={'area': 'myelin_area', 
+                        'eccentricity': 'myelin_eccentricity',
+                        'solidity': 'myelin_solidity',
+                        'intensity_mean': 'myelin_intensity_mean',
+                        'axis_minor_length': 'myelin_axis_minor_length',
+                        'axis_major_length': 'myelin_axis_major_length',
+                        'feret_diameter_max': 'myelin_feret_diameter_max'}, inplace=True)
 
-        ##assert len(obj_table.axes[0]) == 1, "we expected to have a single object"
-        if len(obj_table.axes[0]) > 1:
-            continue
-        
-        
-        obj_table['center_x'] = row['centroid-0']
-        obj_table['center_y'] = row['centroid-1']
+    obj_table['nr_of_parts'] = 1
+    obj_table['status_ok'] = True
+    obj_table['error_msg'] = ""
+    ##assert len(obj_table.axes[0]) == 1, "we expected to have a single object"
+    if len(obj_table.axes[0]) > 1:
+        obj_table['nr_of_parts'] = obj_table.axes[0]
+        obj_table['status_ok'] = False
+        obj_table['error_msg'] = "More than one part"
+        # yield obj_table
+        # continue
+        return obj_table
+    
+    #TODO: do this in rename above?
+    obj_table['center_x'] = props_table['centroid-0']
+    obj_table['center_y'] = props_table['centroid-1']
 
-        # Create the padded myelin_bw image to avoid edge effects in the contours
-        myelin_bw_fill = ndimage.binary_fill_holes(myelin_bw)
-        # create the "axon area", this is the internal area of the myelin region
+    # Create the padded myelin_bw image to avoid edge effects in the contours
+    myelin_bw_fill = ndimage.binary_fill_holes(myelin_bw)
+    # create the "axon area", this is the internal area of the myelin region
+    auto_axon_region = np.logical_xor(myelin_bw_fill,myelin_bw)
+    if np.sum(auto_axon_region)<100:
+        openCnt += 1
+    #    continue
+        warnings.warn("The axon was most probably not closed.")
+        myelin_bw_fill = convex_hull_image(myelin_bw_fill)
         auto_axon_region = np.logical_xor(myelin_bw_fill,myelin_bw)
-        if np.sum(auto_axon_region)<100:
-            openCnt += 1
-        #    continue
-            warnings.warn("The axon was most probably not closed.")
-            myelin_bw_fill = convex_hull_image(myelin_bw_fill)
-            auto_axon_region = np.logical_xor(myelin_bw_fill,myelin_bw)
-            auto_axon_region = isotropic_erosion(auto_axon_region, 3)
-            auto_axon_region = remove_small_objects(auto_axon_region, min_size=500)
-            #assert np.sum(auto_axon_region)>500, f"unexpected problems with the auto axon region {obj_idx}"
-            if np.sum(auto_axon_region)>500:
-                continue
+        auto_axon_region = isotropic_erosion(auto_axon_region, 3)
+        auto_axon_region = remove_small_objects(auto_axon_region, min_size=500)
+        #assert np.sum(auto_axon_region)>500, f"unexpected problems with the auto axon region {obj_idx}"
+        if np.sum(auto_axon_region)>500:
+            obj_table['status_ok'] = False
+            obj_table['error_msg'] = "Axon region > 500"
+            # yield obj_table
+            # continue
+            return obj_table
 
-        myelin_filled_area = np.sum(myelin_bw_fill)
-        obj_table['myelin_filled_area'] =myelin_filled_area
+    myelin_filled_area = np.sum(myelin_bw_fill)
+    obj_table['myelin_filled_area'] =myelin_filled_area
 
-        myelin_bw_pad = np.pad(myelin_bw_fill, ((pad_size, pad_size), (pad_size, pad_size),), mode='constant', constant_values=0)
-        # convex hull calculation including smoothing to avoid pixelation effects
-        try:
-            myelin_min_box_corners, myelin_min_box_edges, rot_mat = bbox_from_BWimg(myelin_bw_pad)
-            # using the bbox as feret calculator and AR
-            obj_table['myelin_feret_max'] = np.max(myelin_min_box_edges)
-            obj_table['myelin_feret_min'] = np.min(myelin_min_box_edges)
-            obj_table['myelin_AR'] = np.max(myelin_min_box_edges)/np.min(myelin_min_box_edges)
-            # calculating myelin median width
-            obj_table['myelin_width'] = morpho.get_width(myelin_bw)
-        except:
-            continue
+    myelin_bw_pad = np.pad(myelin_bw_fill, ((pad_size, pad_size), (pad_size, pad_size),), mode='constant', constant_values=0)
+    # convex hull calculation including smoothing to avoid pixelation effects
+    try:
+        myelin_min_box_corners, myelin_min_box_edges, rot_mat = bbox_from_BWimg(myelin_bw_pad)
+        # using the bbox as feret calculator and AR
+        obj_table['myelin_feret_max'] = np.max(myelin_min_box_edges)
+        obj_table['myelin_feret_min'] = np.min(myelin_min_box_edges)
+        obj_table['myelin_AR'] = np.max(myelin_min_box_edges)/np.min(myelin_min_box_edges)
+        # calculating myelin median width
+        obj_table['myelin_width'] = morpho.get_width(myelin_bw)
+    except Exception as e:
+        obj_table['status_ok'] = False
+        obj_table['error_msg'] = str(e)
+        # yield obj_table
+        # continue
+        return obj_table
 
-        auto_axon_area = np.sum(auto_axon_region)
-        obj_table['myelin_hole_area'] =auto_axon_area
+    auto_axon_area = np.sum(auto_axon_region)
+    obj_table['myelin_hole_area'] =auto_axon_area
 
-        try:
-            contours, max_axon_bbox, max_axon_size = get_box_with_rotation(auto_axon_region, rot_mat.T)
-        except:
-            continue
-        
-        if contours != 1:
-            obj_table['myelin_width_min_feret_direction'] = "skipped"
-            obj_table['myelin_width_max_feret_direction'] = "skipped"    
-        else:
-            myelin_width_min_feret = np.min(myelin_min_box_edges)-np.min(max_axon_size)
-            myelin_width_max_feret = np.max(myelin_min_box_edges)-np.max(max_axon_size)
-            obj_table['myelin_width_min_feret_direction'] = myelin_width_min_feret/2
-            obj_table['myelin_width_max_feret_direction'] = myelin_width_max_feret/2
-        
-        yield obj_table
+    try:
+        contours, max_axon_bbox, max_axon_size = get_box_with_rotation(auto_axon_region, rot_mat.T)
+    except Exception as e:
+        obj_table['status_ok'] = False
+        obj_table['error_msg'] = str(e)
+        # yield obj_table
+        # continue
+        return obj_table
+    
+    if contours != 1:
+        obj_table['myelin_width_min_feret_direction'] = "skipped"
+        obj_table['myelin_width_max_feret_direction'] = "skipped"    
+    else:
+        myelin_width_min_feret = np.min(myelin_min_box_edges)-np.min(max_axon_size)
+        myelin_width_max_feret = np.max(myelin_min_box_edges)-np.max(max_axon_size)
+        obj_table['myelin_width_min_feret_direction'] = myelin_width_min_feret/2
+        obj_table['myelin_width_max_feret_direction'] = myelin_width_max_feret/2
+    
+    #yield obj_table
+    return obj_table
 
     # # cleaning axon label map
     # axon_bw = axon_lbl>0

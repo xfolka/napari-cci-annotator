@@ -79,8 +79,9 @@ class CciAnnotatorQWidget(QWidget):
         self.ann_file_view.setModel(self.imgHandler.getAnnModel())
         
         self.ann_handler = _ann_handler.AnnotationsHandler() 
-        self.annotations_view.setModel(self.ann_handler.get_annotations_model())
+        self.annotations_view.setModel(self.ann_handler.model())
         self.annotations_view.selectionModel().currentChanged.connect(self._on_ann_selection_changed)
+        self.annotations_view.setSortingEnabled(True)
                
         self.imgDirSet = False
         self.annDirSet = False
@@ -457,7 +458,7 @@ class CciAnnotatorQWidget(QWidget):
         
         f_cb = partial(self._future_done_callback, error_msg="Segmentation error", extra_func=onFinished)
         future.add_done_callback(f_cb)
-        self.show_progress_dialog(f"Segmenting using {be_type}", "cancel")
+        self.show_progress_dialog(f"Segmenting using {be_type}", "cancel")        
 
     def _click_annotation_id(self, index):
         coord = self.ann_handler.get_coordinates_for_row(index.row())
@@ -466,6 +467,15 @@ class CciAnnotatorQWidget(QWidget):
 
         self.viewer.camera.center = desired_coordinate
         self.viewer.camera.zoom = desired_zoom_level
+        
+        #select the label in the contros
+        l_layer = self._get_first_labels_layer_if_any();
+        if not l_layer:
+            return
+        
+        label = self.ann_handler.get_label_for_row(index.row())
+        l_layer.selected_label = label
+        
         return
     
     def _del_annotation_clicked(self):
