@@ -1,4 +1,5 @@
 
+from pydantic import InstanceOf
 from qtpy.QtWidgets import  QFileSystemModel
 from qtpy.QtCore import QModelIndex, QDir
 from skimage import io, color
@@ -6,8 +7,11 @@ import os
 import numpy as np
 from ultralytics import YOLO
 import napari_cci_annotator._config as _config
+from napari import layers
 import concurrent.futures
-from .segment_large_image_using_yolo import segment_large_image_data
+#from .segment_large_image_using_yolo import segment_large_image_data
+from .segment_large_image_using_yolo import YoloSegmenter, LargeImageSegmenter, StarDistSegmenter
+
 from .morphometrics import create_morpho_table_from_data
 
 class ImageHandler:
@@ -128,14 +132,44 @@ class ImageHandler:
         rDir.cdUp()
         return self.setAnnRootPath(rDir.absoluteFilePath("annotations"))
     
-    def autoAnnotateImage(self,imgIndx,napariViewer, labels_layer = None):
+    def getModelPath(self, cell_type, backend):
+        cell_type_low = cell_type.lower()
+        
+        if cell_type_low != "axons" and cell_type_low != "myelin":
+            return False, None
+        
         rdir = os.path.dirname(os.path.realpath(__file__))
-        #model_file_path = rdir + "/" +_config.MODELS_DIR + "/myelin/" + _config.MODEL_FILENAME
-        model_file_path = rdir + "/" + _config.MYELIN_MODEL_PATH
-        model = YOLO(model_file_path)
-        img = self.getImgData(imgIndx)
+        
+        model_file_path = rdir + '/' + _config.MODELS_DIR + '/' + cell_type_low + '/'
+        
+        if backend.startswith(_config.OPENVINO_BACKEND_PREFIX):
+            model_file_path += _config.OPENVINO_MODEL_DIR_NAME
+        else:
+            model_file_path +=  _config.MODEL_FILENAME
+            
+        return model_file_path
+    
+    def getDataToAnnotate(self, imgIndex):
+        img = self.getImgData(imgIndex)
         imgData = io.imread(self.imgFileModel.rootPath() + "/" + img)
         rgb_data = color.gray2rgb(imgData)
+        return rgb_data
+    
+    def getLayerToAnnotate(self, napariViewer):
+        pass
+        
+    
+    
+    def autoAnnotateImage(self,imgIndx,napariViewer, cell_type, backend, labels_layer = None):
+        #rdir = os.path.dirname(os.path.realpath(__file__))
+        #model_file_path = rdir + "/" +_config.MODELS_DIR + "/myelin/" + _config.MODEL_FILENAME
+        #model_file_path = rdir + "/" + _config.MYELIN_MODEL_PATH
+        model_file_path = self.getModelPath(cell_type,backend)
+        model = YOLO(model_file_path)
+        rgb_data = self.getDataToAnnotate(imgIndx)
+        # img = self.getImgData(imgIndx)
+        # imgData = io.imread(self.imgFileModel.rootPath() + "/" + img)
+        # rgb_data = color.gray2rgb(imgData)
         results = model.predict(source=rgb_data, imgsz=_config.IMG_SIZE,show_boxes=False,show_labels=False, verbose=False)
         result_masks = results[0].masks
         masks = result_masks.data.cpu().numpy()
@@ -151,27 +185,56 @@ class ImageHandler:
             all_masks = np.where(all_masks == 0, mask, all_masks)
 
         if labels_layer is None:
-            napariViewer.add_labels(all_masks,name="auto_"+self.getAnnotationLayerNameFromImageName(img))
+            napariViewer.add_labels(all_masks,name="auto_"+self.getAnnotationLayerNameFromImageName(self.getImgData(imgIndx)))
         else:
             labels_layer.data = all_masks  # Update the existing layer's data
             labels_layer.refresh()  # Refresh the layer to reflect changes
 
-    def annotate_selected_layer(self, overlap, radius, napariViewer, be_type):
+    def annotate_selected_layer(self, overlap, radius, napariViewer, be_type, cell_type):
+        
+        cell_type_low = cell_type.lower()
+        
+        if cell_type_low != "axons" and cell_type_low != "myelin":
+            return False, None
         
         rdir = os.path.dirname(os.path.realpath(__file__))
+        
+        model_file_path = rdir + '/' + _config.MODELS_DIR + '/' + cell_type_low + '/'
+        
         if be_type.startswith(_config.OPENVINO_BACKEND_PREFIX):
-            model_file_path = rdir + '/' + _config.OPENVINO_MODEL_PATH        
+            model_file_path += _config.OPENVINO_MODEL_DIR_NAME
         else:
-            model_file_path = rdir + '/' + _config.MYELIN_MODEL_PATH
+            model_file_path +=  _config.MODEL_FILENAME
         
-        model = YOLO(model_file_path, task='segment')
-        
+        yolo_seg = YoloSegmenter(model_file_path, 1024)
+        #sd_seg = StarDistSegmenter(_config.AXON_MODEL_NAME,model_file_path,img_size=1024)
+        #model = YOLO(model_file_path, task='segment')
+        segmenter = LargeImageSegmenter()
         selected = napariViewer.layers.selection.active
-        if not selected:
+        if not selected or not isinstance(selected, layers.Image):
             return False, None
         # Submit the task to the executor and get a Future object
-        future = self.executor.submit(segment_large_image_data,model, selected.data, imgSize = 1024, over_lap=overlap, iso_radius=radius)
+        future = self.executor.submit(segmenter.segment_large_image_data,yolo_seg, selected.data, 1024, over_lap=100)
         return True, future
+
+
+    # def annotate_selected_layer(self, overlap, radius, napariViewer, be_type):
+        
+    #     rdir = os.path.dirname(os.path.realpath(__file__))
+    #     if be_type.startswith(_config.OPENVINO_BACKEND_PREFIX):
+    #         model_file_path = rdir + '/' + _config.OPENVINO_MODEL_PATH        
+    #     else:
+    #         model_file_path = rdir + '/' + _config.MYELIN_MODEL_PATH
+        
+    #     yoseg = YoloSegmenter(model_file_path,1024)
+    #     #model = YOLO(model_file_path, task='segment')
+    #     segmenter = LargeImageSegmenter()
+    #     selected = napariViewer.layers.selection.active
+    #     if not selected:
+    #         return False, None
+    #     # Submit the task to the executor and get a Future object
+    #     future = self.executor.submit(segmenter.segment_large_image_data,yoseg, selected.data, 1024, over_lap=100)
+    #     return True, future
         
 
     def delete_annotation(self, index, napariViewer):

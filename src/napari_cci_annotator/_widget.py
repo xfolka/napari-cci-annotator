@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING
 from magicgui import magic_factory
 from magicgui.widgets import CheckBox, Container, create_widget
 from qtpy.QtWidgets import QGridLayout, QHBoxLayout, QVBoxLayout, QMenu, QAction, QSlider,QFormLayout, QPushButton, QCheckBox, QProgressDialog
-from qtpy.QtWidgets import QMessageBox, QWidget, QFileDialog, QLabel, QListView, QAbstractItemView, QTabWidget, QSpinBox, QMessageBox, QTableView
+from qtpy.QtWidgets import QMessageBox, QWidget, QFileDialog, QLabel, QListView, QAbstractItemView, QTabWidget, QSpinBox, QMessageBox, QTableView, QComboBox
 from qtpy.QtCore import QModelIndex, QDir, Qt, QItemSelectionModel, Signal
 from skimage.util import img_as_float
 import napari_cci_annotator._image_handler as _image_handler
@@ -41,6 +41,7 @@ import napari_cci_annotator._annotations_handler as _ann_handler
 from napari.utils.notifications import show_info
 from napari import layers
 import numpy as np
+import napari_cci_annotator._backend_detect as backend    
 from functools import partial
 import torch
 
@@ -64,8 +65,23 @@ class CciAnnotatorQWidget(QWidget):
 
         self.NETWORK_IMG_SIZE = 1024
 
+        self.setLayout(QVBoxLayout())
+        
+        self.backend_label = QLabel("Selected/detected segmentation backend")
+        self.backend_selector = QComboBox()
+        self.backend_selector.addItems(backend.get_list_of_backends())
+        self.cell_type_label = QLabel("Selected cell type")
+        self.cell_type_selector = QComboBox()
+        self.cell_type_selector.addItem("Myelin")
+        self.cell_type_selector.addItem("Axons")
+        self.layout().addWidget(self.backend_label)
+        self.layout().addWidget(self.backend_selector)
+        
+        self.layout().addWidget(self.cell_type_label)
+        self.layout().addWidget(self.cell_type_selector)
+
+
         self.tabWidget = QTabWidget()
-        self.setLayout(QHBoxLayout())
         self.layout().addWidget(self.tabWidget)
         self.tabWidget.addTab(self._createFileListTab(),"Dataset")
         self.tabWidget.addTab(self._createLargeImageAnnotateTab(),"Auto Annotate")
@@ -197,6 +213,14 @@ class CciAnnotatorQWidget(QWidget):
         sliderLayout.addRow("Overlap:", self.overlap_slider)
         mainLayout.addWidget(sliderWidget)
         
+        
+        # self.cell_label = QLabel("Select type of cell to segment")
+        # self.cell_selector = QComboBox()
+        # self.cell_selector.addItem("Myelin")
+        # self.cell_selector.addItem("Axons")
+        # mainLayout.addWidget(self.cell_label)
+        # mainLayout.addWidget(self.cell_selector)
+        
         self.large_img_btn = QPushButton("Start Annotation")
         self.large_img_btn.clicked.connect(self._on_large_img_btn_clicked)
         #large_img_btn.setEnabled(False)
@@ -211,8 +235,7 @@ class CciAnnotatorQWidget(QWidget):
 
         self.backend_btn = QPushButton("Check AI Backend")
         self.backend_btn.clicked.connect(self._on_backend_clicked)
-        #large_img_btn.setEnabled(False)
-        mainLayout.addWidget(self.backend_btn)
+        #mainLayout.addWidget(self.backend_btn)
 
         
         mainLayout.insertStretch(-1,1)
@@ -425,7 +448,7 @@ class CciAnnotatorQWidget(QWidget):
                 msg = error_msg
                 title = "Error during task"
                 if show_exception:
-                    err_msg += ": " + str(future.exception())
+                    msg += ": " + str(future.exception())
                 
 
         if msg is not None:
@@ -438,16 +461,15 @@ class CciAnnotatorQWidget(QWidget):
         radius = self.getRadius()
         overlap = self.overlap_slider.value()
         
-        import napari_cci_annotator._backend_detect as backend    
-        be, be_type = backend.select_backend()
-        
-        if not be:
+        be_type = self.backend_selector.currentText()
+                
+        if not be_type:
            QMessageBox.information(None,"No AI Backend  available","No AI backend available for annotation.")
            return
     
-        res, future = self.imgHandler.annotate_selected_layer(overlap,radius,self.viewer, be_type)
+        res, future = self.imgHandler.annotate_selected_layer(overlap,radius,self.viewer, be_type, self.cell_type_selector.currentText())
         if not res:
-            QMessageBox.information(None,"No layer selected","Select a layer to segment first")
+            QMessageBox.information(None,"No layer selected","Wrong or no layer to segment selected!")
             return
         self.large_img_btn.setEnabled(False)
 
@@ -469,7 +491,7 @@ class CciAnnotatorQWidget(QWidget):
         self.viewer.camera.zoom = desired_zoom_level
         
         #select the label in the contros
-        l_layer = self._get_first_labels_layer_if_any();
+        l_layer = self._get_first_labels_layer_if_any()
         if not l_layer:
             return
         
@@ -602,7 +624,14 @@ class CciAnnotatorQWidget(QWidget):
         
     def _auto_annotate_clicked(self):
         
-        self.imgHandler.autoAnnotateImage(self.img_file_view.currentIndex(),self.viewer)
+        be, be_type = backend.select_backend()
+        if not be:
+            QMessageBox.information(None,"No AI Backend  available","No AI backend available for annotation.")
+            return
+
+        cell_type = self.cell_type_selector.currentText()
+
+        self.imgHandler.autoAnnotateImage(self.img_file_view.currentIndex(),self.viewer,cell_type,be_type)
         
     def _count_label_layers(self):
         cnt = 0
