@@ -10,7 +10,7 @@ import napari_cci_annotator._config as _config
 from napari import layers
 import concurrent.futures
 #from .segment_large_image_using_yolo import segment_large_image_data
-from .segment_large_image_using_yolo import YoloSegmenter, LargeImageSegmenter, StarDistSegmenter
+from .segment_large_image_using_yolo import YoloSegmenter, LargeImageSegmenter
 
 from .morphometrics import create_morpho_table_from_data
 

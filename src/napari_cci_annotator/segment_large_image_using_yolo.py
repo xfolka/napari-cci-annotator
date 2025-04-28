@@ -1,7 +1,6 @@
 from ultralytics import YOLO
 from ultralytics.engine.results import Results
-from stardist.models import Config2D, StarDist2D, StarDistData2D
-from csbdeep.utils import Path, normalize
+#from csbdeep.utils import Path, normalize
 
 from PIL import Image
 import numpy as np
@@ -48,25 +47,19 @@ class AbstractSegmenter:
     
     
     
-class StarDistSegmenter(AbstractSegmenter):
+# class StarDistSegmenter(AbstractSegmenter):
     
-    def __init__(self, model_name, base_dir, img_size):
-        super(StarDistSegmenter,self).__init__(img_size)
-        self.axis_norm = (0,1)   # normalize channels independently
-        self.model_name = model_name
-        self.model = StarDist2D(None, name=model_name, basedir=base_dir)
+#     def __init__(self, model_name, base_dir, img_size):
+#         super(StarDistSegmenter,self).__init__(img_size)
+#         self.axis_norm = (0,1)   # normalize channels independently
+#         self.model_name = model_name
+#         self.model = StarDist2D(None, name=model_name, basedir=base_dir)
 
     
-    def segment_wrapper(self, data):
-        n_data = normalize(data,1,99.8,axis=self.axis_norm)
-        labels, details = self.model.predict_instances(n_data)
-        return labels
-    
-    
-    # def segment_large(self, data):
-    #     n_data = normalize(data,1,99.8,axis=self.axis_norm)
-    #     labels, details = self.model.predict_instances_big(n_data)
-    #     return labels
+#     def segment_wrapper(self, data):
+#         n_data = normalize(data,1,99.8,axis=self.axis_norm)
+#         labels, details = self.model.predict_instances(n_data)
+#         return labels
     
 
 class YoloSegmenter(AbstractSegmenter):
