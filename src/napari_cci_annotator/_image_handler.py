@@ -1,4 +1,5 @@
 
+from ast import Tuple
 from pydantic import InstanceOf
 from qtpy.QtWidgets import  QFileSystemModel
 from qtpy.QtCore import QModelIndex, QDir
@@ -147,7 +148,7 @@ class ImageHandler:
         else:
             model_file_path +=  _config.MODEL_FILENAME
             
-        return model_file_path
+        return True, model_file_path
     
     def getDataToAnnotate(self, imgIndex):
         img = self.getImgData(imgIndex)
@@ -161,15 +162,12 @@ class ImageHandler:
     
     
     def autoAnnotateImage(self,imgIndx,napariViewer, cell_type, backend, labels_layer = None):
-        #rdir = os.path.dirname(os.path.realpath(__file__))
-        #model_file_path = rdir + "/" +_config.MODELS_DIR + "/myelin/" + _config.MODEL_FILENAME
-        #model_file_path = rdir + "/" + _config.MYELIN_MODEL_PATH
-        model_file_path = self.getModelPath(cell_type,backend)
-        model = YOLO(model_file_path)
+        _, model_file_path = self.getModelPath(cell_type,backend)
+        if not model_file_path:
+            return
+        
+        model = YOLO(model_file_path, task='segment')
         rgb_data = self.getDataToAnnotate(imgIndx)
-        # img = self.getImgData(imgIndx)
-        # imgData = io.imread(self.imgFileModel.rootPath() + "/" + img)
-        # rgb_data = color.gray2rgb(imgData)
         results = model.predict(source=rgb_data, imgsz=_config.IMG_SIZE,show_boxes=False,show_labels=False, verbose=False)
         result_masks = results[0].masks
         masks = result_masks.data.cpu().numpy()
