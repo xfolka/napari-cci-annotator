@@ -57,11 +57,11 @@ class AnnotationsHandler:
 
         style = QApplication.style()
 
-        gen = morpho_data_generator(label_image,data_image)
-        for i in range(20):
-            data = next(gen)
+        # gen = morpho_data_generator(label_image,data_image)
+        # for i in range(20):
+        #     data = next(gen)
 
-#        for data in morpho_data_generator(label_image,data_image):
+        for data in morpho_data_generator(label_image,data_image):
             if data.empty:
                 continue
             items = []
