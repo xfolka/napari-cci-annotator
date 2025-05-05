@@ -88,8 +88,7 @@ def get_morphos_for_label(label,label_image, data_image):
     
 
 def morpho_data_generator(label_image, data_image):
-    pad_size = 5
-
+    
     properties = ['label', 'bbox','image','centroid']
     
     reg_table = regionprops_table(label_image=label_image,
@@ -101,7 +100,7 @@ def morpho_data_generator(label_image, data_image):
     reg_table = pd.DataFrame(reg_table)
     #reg_table.sample(5)
 
-    openCnt = 0
+    #openCnt = 0
     totCnt = 0
 
 
@@ -126,11 +125,13 @@ def morpho_data_generator(label_image, data_image):
         myelin_lbl = label_image[min_r:max_r,min_c:max_c]
         myelin_bw = row['image']
         img_data = data_image[min_r:max_r,min_c:max_c]
-        yield get_morphos_for_label_data(myelin_lbl,myelin_bw,img_data,row['label'])
+        yield get_morphos_for_label_data(myelin_lbl,myelin_bw,img_data,row['label'], min_r, min_c)
         
         
-def get_morphos_for_label_data(myelin_lbl, myelin_bw, img_data, label):
-        
+def get_morphos_for_label_data(myelin_lbl, myelin_bw, img_data, label, x_offset = 0, y_offset = 0):
+    
+    pad_size = 5
+
     # get area of the imge identified as myelin, this is my main ROI which defines behaviour of all others.
 #        myelin_bw = morpho.get_BW_from_lbl(myelin_lbl, obj_idx)
     # clean myelin label map, in case other neurons are close by
@@ -163,15 +164,15 @@ def get_morphos_for_label_data(myelin_lbl, myelin_bw, img_data, label):
         return obj_table
     
     #TODO: do this in rename above?
-    obj_table['center_x'] = props_table['centroid-0']
-    obj_table['center_y'] = props_table['centroid-1']
+    obj_table['center_x'] = props_table['centroid-0'] + x_offset
+    obj_table['center_y'] = props_table['centroid-1'] + y_offset
 
     # Create the padded myelin_bw image to avoid edge effects in the contours
     myelin_bw_fill = ndimage.binary_fill_holes(myelin_bw)
     # create the "axon area", this is the internal area of the myelin region
     auto_axon_region = np.logical_xor(myelin_bw_fill,myelin_bw)
     if np.sum(auto_axon_region)<100:
-        openCnt += 1
+    #    openCnt += 1
     #    continue
         warnings.warn("The axon was most probably not closed.")
         myelin_bw_fill = convex_hull_image(myelin_bw_fill)
@@ -181,7 +182,8 @@ def get_morphos_for_label_data(myelin_lbl, myelin_bw, img_data, label):
         #assert np.sum(auto_axon_region)>500, f"unexpected problems with the auto axon region {obj_idx}"
         if np.sum(auto_axon_region)>500:
             obj_table['status_ok'] = False
-            obj_table['error_msg'] = "Axon region > 500"
+            #obj_table['error_msg'] = "Axon region > 500"
+            obj_table['error_msg'] = "Structure not closed..."
             # yield obj_table
             # continue
             return obj_table
