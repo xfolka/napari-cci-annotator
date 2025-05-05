@@ -36,6 +36,7 @@ from qtpy.QtWidgets import QGridLayout, QHBoxLayout, QVBoxLayout, QMenu, QAction
 from qtpy.QtWidgets import QMessageBox, QWidget, QFileDialog, QLabel, QListView, QAbstractItemView, QTabWidget, QSpinBox, QMessageBox, QTableView, QComboBox
 from qtpy.QtCore import QModelIndex, QDir, Qt, QItemSelectionModel, Signal
 from skimage.util import img_as_float
+from skimage.segmentation import clear_border
 import napari_cci_annotator._image_handler as _image_handler
 import napari_cci_annotator._annotations_handler as _ann_handler
 from napari.utils.notifications import show_info
@@ -200,19 +201,25 @@ class CciAnnotatorQWidget(QWidget):
         
         sliderWidget = QWidget()
         sliderLayout = QFormLayout(sliderWidget)
-        self.radius_slider = QSpinBox()
-        self.radius_slider.setMinimum(1)
-        self.radius_slider.setMaximum(20)
+        #self.radius_slider = QSpinBox()
+        #self.radius_slider.setMinimum(1)
+        #self.radius_slider.setMaximum(20)
         #radius_slider.setTickPosition(QSlider.TickBothSides)
-        sliderLayout.addRow("iso opening radius:", self.radius_slider)
+        #sliderLayout.addRow("iso opening radius:", self.radius_slider)
 
         self.overlap_slider = QSpinBox()
-        self.overlap_slider.setMinimum(20)
-        self.overlap_slider.setMaximum(400)
+        self.overlap_slider.setMinimum(100)
+        self.overlap_slider.setMaximum(500)
         self.overlap_slider.setValue(200)
         sliderLayout.addRow("Overlap:", self.overlap_slider)
-        mainLayout.addWidget(sliderWidget)
         
+        self.crop_segment_check = QCheckBox()
+        sliderLayout.addRow("Crop size of segmentation to match model field of view:", self.crop_segment_check)
+
+        self.clear_border_check = QCheckBox()
+        sliderLayout.addRow("Remove segmentations on border:", self.clear_border_check)
+
+        mainLayout.addWidget(sliderWidget)
         
         # self.cell_label = QLabel("Select type of cell to segment")
         # self.cell_selector = QComboBox()
@@ -458,7 +465,6 @@ class CciAnnotatorQWidget(QWidget):
             extra_func()
     
     def _on_large_img_btn_clicked(self):
-        radius = self.getRadius()
         overlap = self.overlap_slider.value()
         
         be_type = self.backend_selector.currentText()
@@ -467,15 +473,18 @@ class CciAnnotatorQWidget(QWidget):
            QMessageBox.information(None,"No AI Backend  available","No AI backend available for annotation.")
            return
     
-        res, future = self.imgHandler.annotate_selected_layer(overlap,radius,self.viewer, be_type, self.cell_type_selector.currentText())
-        if not res:
+        cell_type_name = self.cell_type_selector.currentText()
+        crop_image = self.crop_segment_check.isChecked()
+        clear_border = self.clear_border_check.isChecked()
+        res, future = self.imgHandler.annotate_selected_layer(overlap, self.viewer, be_type, cell_type_name, crop_image, clear_border)
+        if not res or not future:
             QMessageBox.information(None,"No layer selected","Wrong or no layer to segment selected!")
             return
         self.large_img_btn.setEnabled(False)
 
         onFinished = lambda: (
             self.large_img_btn.setEnabled(True), 
-            self.add_labels_signal.emit(future.result(),f"segmentation, rad: {radius}, overlap: {overlap}")
+            self.add_labels_signal.emit(future.result(),f"segmentation, overlap: {overlap}")
         )
         
         f_cb = partial(self._future_done_callback, error_msg="Segmentation error", extra_func=onFinished)

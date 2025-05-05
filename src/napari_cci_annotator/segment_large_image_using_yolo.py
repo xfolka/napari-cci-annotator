@@ -1,36 +1,24 @@
 from ultralytics import YOLO
-from ultralytics.engine.results import Results
-#from csbdeep.utils import Path, normalize
+from ultralytics.utils.ops import scale_masks
+import torch
 
-from PIL import Image
 import numpy as np
 import dask as da
-from dask.array import image
-#import dask.bag as db
-from dask import array
 from pathlib import Path
 import random
 from functools import partial
-from threading import Lock
-#from shapely.affinity import translate
 import threading
 import skimage.color
-import skimage.morphology
+import skimage.segmentation
 from timeit import default_timer as timer
 from collections import defaultdict
 import threading
 import napari_cci_annotator._id_table as id_table
 
-#import config
-
-
-
 class IntGenerator:
     def __init__(self):
         self.lock = threading.Lock()
-        self.cnt : np.uint32 = 100
-
-    #def __iter__(self): return self
+        self.cnt = 100
 
     def getNext(self):
         with self.lock:
@@ -80,7 +68,7 @@ class YoloSegmenter(AbstractSegmenter):
             #print(f"segment chunk {block_id}, {data.shape}, {dimension}")
             rgb_data = skimage.color.gray2rgb(data)
             input_data = np.ascontiguousarray(rgb_data)
-            result = self.model(source=input_data, imgsz=self.getImageSize(),verbose=False)
+            result = self.model.predict(source=input_data, imgsz=self.getImageSize(),verbose=False)
  
         computed_result = result#[0].compute()
         all_masks = np.zeros(shape=data.shape, dtype=np.uint32)
@@ -88,7 +76,18 @@ class YoloSegmenter(AbstractSegmenter):
             return all_masks
         
         result_masks = computed_result[0].masks
-        masks = result_masks.data.cpu().numpy()
+        
+        masks = result_masks.data
+        if not data.shape[0] == self.getImageSize() or not data.shape[1]  == self.getImageSize():
+            if masks.ndim == 2:
+                masks = masks.unsqueeze(0).unsqueeze(0)  # Now shape is (1, 1, H, W)
+            elif masks.ndim == 3:
+                masks = masks.unsqueeze(0)  # (1, C, H, W)
+                
+            masks = scale_masks(masks, result_masks.orig_shape)
+            masks = masks.squeeze(0)
+        
+        masks = masks.cpu().numpy()
         segments = computed_result[0].masks.shape[0]
         
         sh1 = all_masks.shape[0]
@@ -144,15 +143,14 @@ class LargeImageSegmenter:
         neighbour_mod = -1 if not scan_far_side else 1
         
         if scan_vertical: 
-            neighbour_coords_mod =  (neighbour_mod,0)#(border_distance,0)
+            neighbour_coords_mod =  (neighbour_mod,0)
             scan_size = data.shape[1]
         else:
-            neighbour_coords_mod =  (0,neighbour_mod)#(0,border_distance)
+            neighbour_coords_mod =  (0,neighbour_mod)
             scan_size = data.shape[0]
 
         connected_table = defaultdict(lambda: defaultdict(int))
         max_neighbour_local_table = defaultdict(lambda: defaultdict(int))
-        #for coord in range(img_size):
         for coord in range(scan_size):
             if scan_vertical:
                 y = coord 
@@ -197,13 +195,8 @@ class LargeImageSegmenter:
             id_l = l
             id_n = n
             self.tableOfIds.add_eqvivalence_pair(id_l,id_n)
-            #print(f"Adding equivalent ids: {id_l} {id_n} {block_id}")
-            # print(f"merging with id: {id_l} {id_n} {block_id} {scan_vertical}")
-            # idxs = np.where(data == id_l)
-            # data[idxs] = id_n
 
         return data
-
 
     def find_and_change_ids_along_border(self,data, block_info = None):    
         
@@ -233,64 +226,33 @@ class LargeImageSegmenter:
                 data[idxs] = eq_id
         
         return data
+
+    def calculate_chunk_size(self, imgsize, overlap):
+        return int(imgsize - (2 * overlap))
+
+    def segment_large_image_crop_to_match_model_size(self, concrete_segmenter, imageData, imgSize = 1024, overlap = 100, clearBorders=False):
+        chunk_size = self.calculate_chunk_size(imgSize,overlap)
+        img_width = imageData.shape[0]
+        crop_width = (img_width // chunk_size) * chunk_size
         
-
-
-    # @da.delayed
-    # def segment_with_yolo(self,model, data, dimension):
-    #     input_data = np.ascontiguousarray(data)
-    #     results = model(source=input_data, imgsz=dimension,verbose=False)
-    #     return results
-
-    # def segment_wrapper(self,model, dimension, data, block_id):
-    #     #data.resize((dimension,dimension),refcheck=False)
-    #     with self.model_mutex:
-    #         print(f"segment chunk {block_id}, {data.shape}, {dimension}")
-    #         rgb_data = skimage.color.gray2rgb(data)
-    #         result = self.segment_with_yolo(model,rgb_data,dimension)
-    #         computed_result = result.compute()
-                
-    #     #all_masks = np.zeros(shape=(dimension,dimension), dtype=np.uint32)
-    #     all_masks = np.zeros(shape=data.shape, dtype=np.uint32)
-    #     if computed_result is None or computed_result[0].masks is None:
-    #         return all_masks
+        img_height = imageData.shape[1]
+        crop_height = (img_height // chunk_size) * chunk_size
         
-    #     result_masks = computed_result[0].masks
-    #     masks = result_masks.data.cpu().numpy()
-    #     segments = computed_result[0].masks.shape[0]
-        
-        
-    #     sh1 = all_masks.shape[0]
-    #     sh2 = all_masks.shape[1]
-    #     #tmp_id = intGen.getNext()
+        return self.segment_large_image_data(concrete_segmenter, imageData[:crop_width,:crop_height], imgSize=concrete_segmenter.getImageSize(), clearBorders=clearBorders)
 
-    #     print(f"all_mask shape {all_masks.shape}, segmented shape {segments}")
-    #     for n in range(segments):
-    #         #res = skimage.morphology.binary_closing(masks[n])
-    #         #res = skimage.morphology.diameter_closing(masks[n],diameter_threshold=5)
-    #         res =masks[n]
-    #         mask = res * self.intGen.getNext()
-    #         all_masks[:sh1, :sh2] = np.where(all_masks[:sh1, :sh2] == 0, mask[:sh1, :sh2], all_masks[:sh1, :sh2])        
-
-    #     return all_masks
-
-
-    def segment_large_image(self, concrete_segmenter, imagePath, outPath = None):
+    def segment_large_image(self, concrete_segmenter, imagePath, clearBorders = False):
 
         img_data = da.array.image.imread(imagePath)
-        self.segment_large_image_data(concrete_segmenter, img_data, imgSize=concrete_segmenter.getImageSize())
+        return self.segment_large_image_data(concrete_segmenter, img_data, imgSize=concrete_segmenter.getImageSize(), clearBorders=clearBorders)
 
-    def segment_large_image_data(self, concrete_segmenter, imageData, imgSize = 1024, over_lap = 100, iso_radius =4):
+    def segment_large_image_data(self, concrete_segmenter, imageData, imgSize = 1024, overlap = 100, clearBorders = False):
 
         large_image_tmp = da.array.from_array(imageData)
         s = large_image_tmp.shape
-        img_size = imgSize#config.IMG_SIZE
-        overlap = over_lap#config.OVERLAP
-        chunk_size =int(img_size - (2 * overlap))
-
+        chunk_size = self.calculate_chunk_size(imgSize, overlap)
+        
         large_image = large_image_tmp.reshape((s[0],s[1])).rechunk((chunk_size,chunk_size,1))
 
-        #bound_f = partial(self.segment_wrapper, model, img_size)
         meta = np.empty((chunk_size, chunk_size), dtype=np.uint32)
         segment_results = da.array.map_overlap(concrete_segmenter.segment_wrapper, large_image, meta=meta, chunks=(chunk_size,chunk_size) ,depth=overlap, boundary='reflect', trim=True, allow_rechunk=True)
 
@@ -306,10 +268,7 @@ class LargeImageSegmenter:
         self.tableOfIds.group_ids()
 
         new_dask_array = da.array.from_array(res)
-        s = new_dask_array.shape
-        img_size = imgSize#config.IMG_SIZE
-        overlap = over_lap#config.OVERLAP
-        chunk_size =int(img_size - (2 * overlap))
+        
         final_dask = new_dask_array.reshape((s[0],s[1])).rechunk((chunk_size,chunk_size,1))
     
         end_result = final_dask.map_blocks(self.find_and_change_ids_along_border,dtype=np.uint32)
@@ -317,64 +276,13 @@ class LargeImageSegmenter:
         print("starting...")
         
         start = timer()
-        # result = v1_result.compute()
         result = end_result.compute()
-    #    result = combined_result.compute(scheduler='single-threaded')
         end = timer()
         
         print("stopping: ",end - start)
         
+        if clearBorders:
+            print("Clearing borders")
+            result = skimage.segmentation.clear_border(result)
+        
         return result
-        # save_im = Image.fromarray(result)
-        
-        # if outPath:
-        #     outdir = outPath
-        # else:
-        #     outdir = os.path.dirname(imagePath)
-            
-        # outfile = "segment_" + os.path.basename(imagePath)#config.RESULT_OUTPUT_MASK_IMAGE
-        # save_im.save(outdir + "/" + outfile)
-        # print(f"Image mask saved as {outfile}")
-        
-        # data = {
-        #     "file_name" : os.path.basename(imagePath),
-        #     "chunk_size" : chunk_size,
-        #     "overlap" : overlap,
-        #     "image_size" : img_size,
-        #     "iso_opening_radius" : iso_radius
-        # }
-
-        # # Convert the dictionary to JSON
-        # json_data = json.dumps(data, indent=4)
-
-        # # Define the file path
-        # file_path = "metadata_" + os.path.basename(imagePath) + ".json"
-
-        # # Save the JSON to a file
-        # with open(outdir + "/" + file_path, "w") as file:
-        #     file.write(json_data)
-        
-
-    # def segment_large_image_directory(path, outPath=None, modelPath=None):
-    #     # img_dl_path = config.DL_PATH + "images/"
-    #     # annot_dl_path = config.DL_PATH + "annotations/"
-
-    #     # Path(config.DL_PATH).mkdir(parents=True, exist_ok=True)
-    #     # Path(img_dl_path).mkdir(parents=True, exist_ok=True)
-    #     # Path(annot_dl_path).mkdir(parents=True, exist_ok=True)
-    #     # if config.CLEAR_OUTPUT_DIR:
-        
-    #     if modelPath:
-    #         model_file_path = modelPath + "/" + config.MODEL_SAVE_FILE_NAME
-    #     else:
-    #         model_file_path = config.MODEL_SAVE_DIR + "/" + config.MODEL_SAVE_FILE_NAME
-        
-    #     model = YOLO(model_file_path)
-        
-    #     files = glob.glob(path + "/*.png")
-    #     for f in files:
-    #         segment_large_image(model, f, outPath)
-            
-            
-    # base =  os.path.dirname(__file__)
-    # segment_large_image_directory(base + "/../../images",base + "/../../images",base + "/../../models/myelin")

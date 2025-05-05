@@ -188,7 +188,7 @@ class ImageHandler:
             labels_layer.data = all_masks  # Update the existing layer's data
             labels_layer.refresh()  # Refresh the layer to reflect changes
 
-    def annotate_selected_layer(self, overlap, radius, napariViewer, be_type, cell_type):
+    def annotate_selected_layer(self, overlap, napariViewer, be_type, cell_type, crop_image, clear_border):
         
         cell_type_low = cell_type.lower()
         
@@ -212,7 +212,11 @@ class ImageHandler:
         if not selected or not isinstance(selected, layers.Image):
             return False, None
         # Submit the task to the executor and get a Future object
-        future = self.executor.submit(segmenter.segment_large_image_data,yolo_seg, selected.data, 1024, over_lap=100)
+        func = segmenter.segment_large_image_data
+        if crop_image:
+            func = segmenter.segment_large_image_crop_to_match_model_size
+        
+        future = self.executor.submit(func,yolo_seg, selected.data, 1024, overlap, clear_border)
         return True, future
 
 
