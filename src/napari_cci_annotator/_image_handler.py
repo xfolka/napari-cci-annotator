@@ -144,9 +144,15 @@ class ImageHandler:
         model_file_path = rdir + '/' + _config.MODELS_DIR + '/' + cell_type_low + '/'
         
         if backend.startswith(_config.OPENVINO_BACKEND_PREFIX):
-            model_file_path += _config.OPENVINO_MODEL_DIR_NAME
+            if cell_type_low == "axons":
+                model_file_path += _config.OPENVINO_AXON_MODEL_DIR_NAME
+            else:
+                model_file_path += _config.OPENVINO_MYELIN_MODEL_DIR_NAME
         else:
-            model_file_path +=  _config.MODEL_FILENAME
+            if cell_type_low == "axons":
+                model_file_path +=  _config.AXON_MODEL_FILENAME
+            else:
+                model_file_path +=  _config.MYELIN_MODEL_FILENAME
             
         return True, model_file_path
     
@@ -200,9 +206,15 @@ class ImageHandler:
         model_file_path = rdir + '/' + _config.MODELS_DIR + '/' + cell_type_low + '/'
         
         if be_type.startswith(_config.OPENVINO_BACKEND_PREFIX):
-            model_file_path += _config.OPENVINO_MODEL_DIR_NAME
+            if cell_type_low == "axons":
+                model_file_path += _config.OPENVINO_AXON_MODEL_DIR_NAME
+            else:
+                model_file_path += _config.OPENVINO_MYELIN_MODEL_DIR_NAME
         else:
-            model_file_path +=  _config.MODEL_FILENAME
+            if cell_type_low == "axons":
+                model_file_path +=  _config.AXON_MODEL_FILENAME
+            else:
+                model_file_path +=  _config.MYELIN_MODEL_FILENAME
         
         yolo_seg = YoloSegmenter(model_file_path, 1024)
         #sd_seg = StarDistSegmenter(_config.AXON_MODEL_NAME,model_file_path,img_size=1024)
