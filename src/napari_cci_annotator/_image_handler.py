@@ -259,6 +259,6 @@ class ImageHandler:
            napariViewer.layers.remove(annLayer)
         self.annFileModel.remove(index)
 
-    def calulate_morphometrics(self, name, label_layer, image_layer):
-        future = self.executor.submit(create_morpho_table_from_data, name, label_layer, image_layer)
+    def calulate_morphometrics(self, name, myelin_label_layer, axon_label_layer, image_layer):
+        future = self.executor.submit(create_morpho_table_from_data, name, myelin_label_layer, axon_label_layer, image_layer)
         return future

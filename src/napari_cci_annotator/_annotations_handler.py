@@ -26,7 +26,9 @@ class AnnotationsHandler:
         self._proxy_model = NumericSortProxyModel()
         self._proxy_model.setSourceModel(self._ann_model)
         self.executor = ThreadPoolExecutor()
+        # self.model().setColumnCount(8)
         self.set_headers()
+        
         
     def model(self):
         return self._proxy_model
@@ -34,12 +36,13 @@ class AnnotationsHandler:
     def set_headers(self):
         #self._ann_model.setColumnCount(6)
         self.model().setHeaderData(0,Qt.Horizontal,"Label id", Qt.DisplayRole)
-        self._ann_model.setHeaderData(1,Qt.Horizontal,"X coord")
-        self._ann_model.setHeaderData(2,Qt.Horizontal,"Y coord")
-        self._ann_model.setHeaderData(3,Qt.Horizontal,"Area (pixels)")
-        self._ann_model.setHeaderData(4,Qt.Horizontal,"# parts")
-        self._ann_model.setHeaderData(5,Qt.Horizontal,"status")
-        
+        self.model().setHeaderData(1,Qt.Horizontal,"X coord")
+        self.model().setHeaderData(2,Qt.Horizontal,"Y coord")
+        self.model().setHeaderData(3,Qt.Horizontal,"Area (px)")
+        self.model().setHeaderData(4,Qt.Horizontal,"# parts")
+        self.model().setHeaderData(5,Qt.Horizontal,"Axon area")
+        self.model().setHeaderData(6,Qt.Horizontal,"Axon calcu.")
+        self.model().setHeaderData(7,Qt.Horizontal,"status")
         
     def clear_model(self):
         self._proxy_model.clear()
@@ -48,20 +51,20 @@ class AnnotationsHandler:
     def count(self):
         return self._ann_model.rowCount()
     
-    def add_annotations_to_model(self, label_image, data_image, napariViewer):
-        future = self.executor.submit(self._add_annotations, label_image, data_image, napariViewer)
+    def add_annotations_to_model(self, myelin_label_image, axon_label_image,data_image, napariViewer):
+        future = self.executor.submit(self._add_annotations, myelin_label_image, axon_label_image, data_image, napariViewer)
         return future
 
-    def _add_annotations(self, label_image, data_image, napariViewer):
+    def _add_annotations(self, myelin_label_image, axon_label_image, data_image, napariViewer):
         self.clear_model()
 
         style = QApplication.style()
 
-        # gen = morpho_data_generator(label_image,data_image)
+        cnt = 0
+        # gen = morpho_data_generator(myelin_label_image,axon_label_image, data_image)
         # for i in range(20):
         #     data = next(gen)
-
-        for data in morpho_data_generator(label_image,data_image):
+        for data in morpho_data_generator(myelin_label_image,axon_label_image, data_image):
             if data.empty:
                 continue
             items = []
@@ -91,35 +94,28 @@ class AnnotationsHandler:
             nrItems.setData(nit)
             items.append(nrItems)
             
+            aa = data["axon_area"][0]
+            aaItems = QStandardItem(str(aa))
+            aaItems.setData(aa)
+            items.append(aaItems)
+            
+            ac = data["axon_calculation"][0]
+            acItems = QStandardItem(str(ac))
+            acItems.setData(ac)
+            items.append(acItems)
             
             statusItem = QStandardItem("")
-            if not data['status_ok'][0]:
+            
+            if data['status_ok'][0] == False:
                 statusItem.setIcon(style.standardIcon(QStyle.SP_MessageBoxWarning))
                 statusItem.setToolTip(data['error_msg'][0])
 
             items.append(statusItem)
             
             self._ann_model.appendRow(items)
+            print(f"adding {cnt} to model, status: {data['status_ok'][0]}")
+            cnt += 1
             
-            #print(f"Processing label {label}")
-
-                
-        #         # Process each label
-        #         self._ann_model.appendRow(items)
-        # unique_labels = np.unique(annLayerData)
-        # for label in unique_labels:
-        #     if label != 0:  # Assuming 0 is the background
-        #         items = []
-        #         labelItem = QStandardItem(str(label))
-        #         items.append(labelItem)
-                
-        #         center_coordinate = np.mean(np.argwhere(annLayerData == label), axis=0)
-        #         xItem = QStandardItem(str(center_coordinate[1]))
-        #         yItem = QStandardItem(str(center_coordinate[0]))
-        #         items.append(xItem)
-        #         items.append(yItem)
-                
-        #         # Process each label
         self.set_headers()
         
         
@@ -143,6 +139,11 @@ class AnnotationsHandler:
         return self._proxy_model.removeRow(row)
     
     def generate_xls_report(self, name):
+        future = self.executor.submit(self._generate_xls_report,name)
+        return future
+
+    
+    def _generate_xls_report(self, name):
         total_table = pd.DataFrame()
         for row in range(self._ann_model.rowCount()):
             item = self._ann_model.item(row,0)

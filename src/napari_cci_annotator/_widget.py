@@ -129,8 +129,8 @@ class CciAnnotatorQWidget(QWidget):
         
         # img_btn = QPushButton("Select image dir")
         # img_btn.clicked.connect(self._on_img_btn_click)
-        self.annotations_label = QLabel("No Annotations...")
-        mainLayout.addWidget(self.annotations_label)
+        #self.annotations_label = QLabel("No Annotations...")
+        #mainLayout.addWidget(self.annotations_label)
         
         self.annotations_view = QTableView()
         self.annotations_view.setEnabled(False)
@@ -160,7 +160,7 @@ class CciAnnotatorQWidget(QWidget):
         mainLayout.addWidget(self.del_ann_btn)
         
         self.save_morpho_btn = QPushButton("Save Morpho xls")
-        self.save_morpho_btn.setEnabled(False)
+        #self.save_morpho_btn.setEnabled(False)
         self.save_morpho_btn.clicked.connect(self._save_morpho_xls)
         mainLayout.addWidget(self.save_morpho_btn)
         
@@ -217,6 +217,7 @@ class CciAnnotatorQWidget(QWidget):
         sliderLayout.addRow("Crop size of segmentation to match model field of view:", self.crop_segment_check)
 
         self.clear_border_check = QCheckBox()
+        self.clear_border_check.setChecked(True)
         sliderLayout.addRow("Remove segmentations on border:", self.clear_border_check)
 
         mainLayout.addWidget(sliderWidget)
@@ -484,7 +485,7 @@ class CciAnnotatorQWidget(QWidget):
 
         onFinished = lambda: (
             self.large_img_btn.setEnabled(True), 
-            self.add_labels_signal.emit(future.result(),f"segmentation, overlap: {overlap}")
+            self.add_labels_signal.emit(future.result(),f"{cell_type_name.lower()}-segmentation")
         )
         
         f_cb = partial(self._future_done_callback, error_msg="Segmentation error", extra_func=onFinished)
@@ -500,12 +501,14 @@ class CciAnnotatorQWidget(QWidget):
         self.viewer.camera.zoom = desired_zoom_level
         
         #select the label in the contros
-        l_layer = self._get_first_labels_layer_if_any()
+        l_layer = self._get_first_labels_layer_by_cell_type_if_any("myelin")
         if not l_layer:
             return
         
         label = self.ann_handler.get_label_for_row(index.row())
         l_layer.selected_label = label
+        self.viewer.layers.selection.clear()
+        self.viewer.layers.selection.add(l_layer)
         
         return
     
@@ -535,27 +538,52 @@ class CciAnnotatorQWidget(QWidget):
             return
         
         fileName = QFileDialog.getSaveFileName(caption="Save File", directory="./morpho_report.xlsx", filter="*.xlsx")
-        self.ann_handler.generate_xls_report(fileName[0])
-
+        future = self.ann_handler.generate_xls_report(fileName[0])
+        
+        # onFinished = lambda: (
+        #     self.annotations_view.setEnabled(self.ann_handler.count() > 0),
+        #     self.del_ann_btn.setEnabled(True)
+        # )
+        
+        #f_cb = partial(self._future_done_callback)
+        future.add_done_callback(self._future_done_callback)
+        self.show_progress_dialog("Saving morphometrics...","cancel")
+        
     def show_message_box(self, title,msg):
         QMessageBox.information(None, title,msg,buttons = QMessageBox.Ok)
 
-    def _on_read_ann_btn_click(self):
-        if self._count_label_layers() > 1:
-            self.show_message_box("More than one labels layer","More than one labels exist.\nDelete all unwanted label layers and try again.")
-            return False
+
+    def _check_layers_for_morpho(self):
+        if self._count_label_layers_by_cell_type("myelin") != 1 or self._count_label_layers_by_cell_type("axon") != 1:
+            self.show_message_box("Wrong number of layers","Make sure there are exactly one myelin layer and one axon layer\nDelete all unwanted label layers and try again.")
+            return False, None , None , None
         
-        label_layer = self._get_first_labels_layer_if_any()
-        if not label_layer:
-            self.show_message_box("No labels layer","No labels layer available")
-            return False
+        myelin_label_layer = self._get_first_labels_layer_by_cell_type_if_any("myelin")
+        if not myelin_label_layer:
+            self.show_message_box("No myelin labels layer","No myelin labels layer available")
+            return False, None , None , None
+        
+        axon_label_layer = self._get_first_labels_layer_by_cell_type_if_any("axon")
+        if not axon_label_layer:
+            self.show_message_box("No axon labels layer","No axon labels layer available")
+            return False, None , None , None
+
         
         image_layer = self._get_first_image_layer_if_any()
         if not image_layer:
             self.show_message_box("No image layer","No image layer available")
+            return False, None , None , None
+        
+        return True, myelin_label_layer, axon_label_layer, image_layer
+        
+
+    def _on_read_ann_btn_click(self):
+        
+        res, myelin_label_layer, axon_label_layer, image_layer = self._check_layers_for_morpho()
+        if not res:
             return False
         
-        future = self.ann_handler.add_annotations_to_model(label_layer.data, image_layer.data, self.viewer)
+        future = self.ann_handler.add_annotations_to_model(myelin_label_layer.data, axon_label_layer.data, image_layer.data, self.viewer)
 
         onFinished = lambda: (
             self.annotations_view.setEnabled(self.ann_handler.count() > 0),
@@ -567,15 +595,10 @@ class CciAnnotatorQWidget(QWidget):
         self.show_progress_dialog("Adding annotations...","cancel")
 
     def _on_morphometrics_clicked(self):
-        print("Morpho here!!")
-        if self._count_label_layers() > 1 or self._count_image_layers() > 1:
-            QMessageBox.information(None, 
-                        "More than one labels or image layer",
-                        "More than one labels or image layer exist.\nDelete all unwanted layers and try again.",
-                        buttons = QMessageBox.Ok)
+        
+        res, myelin_label_layer, axon_label_layer, image_layer = self._check_layers_for_morpho()
+        if not res:
             return False
-        label_layer = self._get_first_labels_layer_if_any()
-        image_layer = self._get_first_image_layer_if_any()
         
         xls_dir = QFileDialog.getExistingDirectory(caption = "Select morpho table directory")
         if xls_dir == '':
@@ -585,7 +608,7 @@ class CciAnnotatorQWidget(QWidget):
         
         #start progress diablog
         f_cb = partial(self._future_done_callback, success_msg=f"Morphometrics saved in: {fname}", error_msg="Exception during morphometrics")
-        future = self.imgHandler.calulate_morphometrics(fname,label_layer.data,image_layer.data)
+        future = self.imgHandler.calulate_morphometrics(fname,myelin_label_layer.data, axon_label_layer.data, image_layer.data)
         future.add_done_callback(f_cb)
         self.show_progress_dialog("working morphometrics...","Cancel")
         
@@ -622,6 +645,13 @@ class CciAnnotatorQWidget(QWidget):
             if isinstance(layer, layers.Labels):
                 return layer
         return None
+
+    def _get_first_labels_layer_by_cell_type_if_any(self, cell_type : str):
+        for layer in self.viewer.layers:
+            if isinstance(layer, layers.Labels) and layer.name.lower().startswith(cell_type.lower()):
+                return layer
+        return None
+
         
     def _get_first_image_layer_if_any(self):
         for layer in self.viewer.layers:
@@ -648,6 +678,14 @@ class CciAnnotatorQWidget(QWidget):
             if isinstance(layer, layers.Labels):
                 cnt+=1
         return cnt
+
+    def _count_label_layers_by_cell_type(self, cell_type : str):
+        cnt = 0
+        for layer in self.viewer.layers:
+            if isinstance(layer, layers.Labels) and layer.name.lower().startswith(cell_type.lower()):
+                cnt+=1
+        return cnt
+
 
     def _count_image_layers(self):
         cnt = 0
