@@ -35,14 +35,15 @@ class AnnotationsHandler:
         
     def set_headers(self):
         #self._ann_model.setColumnCount(6)
-        self.model().setHeaderData(0,Qt.Horizontal,"Label id", Qt.DisplayRole)
-        self.model().setHeaderData(1,Qt.Horizontal,"X coord")
-        self.model().setHeaderData(2,Qt.Horizontal,"Y coord")
-        self.model().setHeaderData(3,Qt.Horizontal,"Area (px)")
-        self.model().setHeaderData(4,Qt.Horizontal,"# parts")
-        self.model().setHeaderData(5,Qt.Horizontal,"Axon area")
-        self.model().setHeaderData(6,Qt.Horizontal,"Axon calcu.")
-        self.model().setHeaderData(7,Qt.Horizontal,"status")
+        self.model().setHeaderData(0,Qt.Horizontal,"Myelin id", Qt.DisplayRole)
+        self.model().setHeaderData(1,Qt.Horizontal,"Axon id", Qt.DisplayRole)
+        self.model().setHeaderData(2,Qt.Horizontal,"X coord")
+        self.model().setHeaderData(3,Qt.Horizontal,"Y coord")
+        self.model().setHeaderData(4,Qt.Horizontal,"Area (px)")
+        self.model().setHeaderData(5,Qt.Horizontal,"# parts")
+        self.model().setHeaderData(6,Qt.Horizontal,"Axon area")
+        self.model().setHeaderData(7,Qt.Horizontal,"Axon calcu.")
+        self.model().setHeaderData(8,Qt.Horizontal,"status")
         
     def clear_model(self):
         self._proxy_model.clear()
@@ -68,11 +69,19 @@ class AnnotationsHandler:
             if data.empty:
                 continue
             items = []
-            label = data.label[0]
-            labelItem = QStandardItem(str(label))
-            labelItem.setData(label)
-            labelItem.setData(data, Qt.UserRole+2)
-            items.append(labelItem)
+            myelin_label = data.myelin_label[0]
+            myelinLabelItem = QStandardItem(str(myelin_label))
+            myelinLabelItem.setData(myelin_label)
+            myelinLabelItem.setData(data, Qt.UserRole+2)
+            items.append(myelinLabelItem)
+
+            if data['status_ok'][0]:
+                axon_label = data['axon_label'][0]
+            else:
+                axon_label = "-"
+            axonLabelItem = QStandardItem(str(axon_label))
+            axonLabelItem.setData(axon_label)
+            items.append(axonLabelItem)
 
             x = data['center_x'][0]
             xItem = QStandardItem(str(x))
@@ -124,15 +133,15 @@ class AnnotationsHandler:
         return float(self._proxy_model.data(idx))
         
     def get_coordinates_for_row(self,row):
-        x_idx = self._proxy_model.index(row,1)
-        y_idx = self._proxy_model.index(row,2)
+        x_idx = self._proxy_model.index(row,2)
+        y_idx = self._proxy_model.index(row,3)
         xc = float(self._proxy_model.data(x_idx))
         yc = float(self._proxy_model.data(y_idx))
         
         return (xc,yc)
     
     def get_status_msg_for_row(self, row):
-        idx = self._proxy_model.index(row,5)
+        idx = self._proxy_model.index(row,6)
         return str(self._proxy_model.data(idx))
     
     def remove_row(self,row):
