@@ -16,14 +16,19 @@ import threading
 import napari_cci_annotator._id_table as id_table
 
 class IntGenerator:
-    def __init__(self):
+    def __init__(self, startValue = 100):
         self.lock = threading.Lock()
-        self.cnt = 100
+        self.cnt = 0
+        self.startValue = startValue
+
+    def setStartValue(self, startValue):
+        with self.lock:
+            self.startValue = startValue
 
     def getNext(self):
         with self.lock:
             self.cnt += 1
-            return self.cnt
+            return self.startValue + self.cnt
 
 class AbstractSegmenter:
     def __init__(self, img_size):
