@@ -45,7 +45,7 @@ def get_list_of_backends():
     
     # If no TensorFlow GPU, check OpenVINO
     try:
-        from openvino.runtime import Core
+        from openvino import Core
         core = Core()
         devices = core.available_devices
         if 'GPU' in devices:
