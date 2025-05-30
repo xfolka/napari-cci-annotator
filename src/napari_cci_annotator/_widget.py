@@ -537,12 +537,6 @@ class CciAnnotatorQWidget(QWidget):
         fileName = QFileDialog.getSaveFileName(caption="Save File", directory="./morpho_report.xlsx", filter="*.xlsx")
         future = self.ann_handler.generate_xls_report(fileName[0])
         
-        # onFinished = lambda: (
-        #     self.annotations_view.setEnabled(self.ann_handler.count() > 0),
-        #     self.del_ann_btn.setEnabled(True)
-        # )
-        
-        #f_cb = partial(self._future_done_callback)
         future.add_done_callback(self._future_done_callback)
         self.show_progress_dialog("Saving morphometrics...","cancel")
         
