@@ -57,6 +57,7 @@ class CciAnnotatorQWidget(QWidget):
     
     add_labels_signal = Signal(np.ndarray,str)
     close_progress_signal = Signal()
+    update_progress_signal = Signal(int,int)
     show_result_dialog_signal = Signal(str, str)
     
     
@@ -110,6 +111,7 @@ class CciAnnotatorQWidget(QWidget):
         self.add_labels_signal.connect(self._add_labels_slot,Qt.QueuedConnection)
         self.show_result_dialog_signal.connect(self._show_result_dialog, Qt.QueuedConnection)
         self.close_progress_signal.connect(self._close_progress_dialog, Qt.QueuedConnection)
+        self.update_progress_signal.connect(self._update_progress_dialog, Qt.QueuedConnection)
         
 
         self.progress_dialog = QProgressDialog("","",0,0)
@@ -127,28 +129,15 @@ class CciAnnotatorQWidget(QWidget):
         mainLayout = QVBoxLayout()
         mainWidget.setLayout(mainLayout)
         
-        # img_btn = QPushButton("Select image dir")
-        # img_btn.clicked.connect(self._on_img_btn_click)
-        #self.annotations_label = QLabel("No Annotations...")
-        #mainLayout.addWidget(self.annotations_label)
-        
         self.annotations_view = QTableView()
         self.annotations_view.setEnabled(False)
         mainLayout.addWidget(self.annotations_view)
         self.annotations_view.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.annotations_view.setSelectionMode(QAbstractItemView.SingleSelection)
 
-        # mainLayout.addWidget(img_btn,0,0)
-        # mainLayout.addWidget(self.img_dir_label,1,0)
-
         read_ann_btn = QPushButton("Read annotations")
         read_ann_btn.clicked.connect(self._on_read_ann_btn_click)
         
-        
-        # self.ann_dir_label = QLabel("None selected")
-        # self.ann_file_view = QListView()
-        # self.ann_file_view.setEnabled(False)
-        # self.ann_file_view.setSelectionMode(QAbstractItemView.SingleSelection)
 
         mainLayout.addWidget(read_ann_btn)
         self.annotations_view.clicked.connect(self._click_annotation_id)
@@ -160,7 +149,8 @@ class CciAnnotatorQWidget(QWidget):
         mainLayout.addWidget(self.del_ann_btn)
         
         self.save_morpho_btn = QPushButton("Save Morpho xls")
-        #self.save_morpho_btn.setEnabled(False)
+        self.save_morpho_btn.setEnabled(False)
+        self.save_morpho_btn.setToolTip("Read annotations to enable this button...")
         self.save_morpho_btn.clicked.connect(self._save_morpho_xls)
         mainLayout.addWidget(self.save_morpho_btn)
         
@@ -234,11 +224,9 @@ class CciAnnotatorQWidget(QWidget):
         #large_img_btn.setEnabled(False)
         mainLayout.addWidget(self.large_img_btn)
         
-        self.morpho_btn = QPushButton("Morphometrics")
-        self.morpho_btn.clicked.connect(self._on_morphometrics_clicked)
-        #large_img_btn.setEnabled(False)
-        mainLayout.addWidget(self.morpho_btn)
-        #self.morpho_btn.setVisible(False)
+        # self.morpho_btn = QPushButton("Morphometrics")
+        # self.morpho_btn.clicked.connect(self._on_morphometrics_clicked)
+        # mainLayout.addWidget(self.morpho_btn)
 
 
         self.backend_btn = QPushButton("Check AI Backend")
@@ -441,9 +429,18 @@ class CciAnnotatorQWidget(QWidget):
 
     def show_progress_dialog(self,label,cancel):
         self.progress_dialog.setLabelText(label)
+        self.progress_dialog.setMinimum(0)
         self.progress_dialog.setCancelButtonText(cancel)
         self.progress_dialog.open()
         
+        
+    def _update_progress_dialog(self, current_value, max_value):
+        self.progress_dialog.setMaximum(max_value)
+        self.progress_dialog.setValue(current_value)
+        self.progress_dialog.setLabelText(f"Processing {current_value}/{max_value}")
+        
+    def _update_progress_callback(self, current_value, max_value):
+        self.update_progress_signal.emit(current_value,max_value)
         
     def _future_done_callback(self, future, success_msg = None, error_msg = None, extra_func = None, show_exception = True):
         self.close_progress_signal.emit()
@@ -583,11 +580,12 @@ class CciAnnotatorQWidget(QWidget):
         if not res:
             return False
         
-        future = self.ann_handler.add_annotations_to_model(myelin_label_layer.data, axon_label_layer.data, image_layer.data, self.viewer)
+        future = self.ann_handler.add_annotations_to_model(myelin_label_layer.data, axon_label_layer.data, image_layer.data, self._update_progress_callback)
 
         onFinished = lambda: (
             self.annotations_view.setEnabled(self.ann_handler.count() > 0),
-            self.del_ann_btn.setEnabled(True)
+            self.del_ann_btn.setEnabled(True),
+            self.save_morpho_btn.setEnabled(True)
         )
         
         f_cb = partial(self._future_done_callback, extra_func=onFinished)

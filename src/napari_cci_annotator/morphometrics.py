@@ -102,6 +102,8 @@ def morpho_data_generator(myelin_label_image, axon_label_image, data_image):
     num_labels = len(np.unique(myelin_label_image)) - 1
     print(f"Number of labels in layer: {len(reg_table['label'])} or {num_labels}")
     
+    yield num_labels
+    
     reg_table = pd.DataFrame(reg_table)
     totCnt = 0
     axon_max_label = np.max(axon_label_image)
@@ -209,6 +211,9 @@ def get_morphos_for_label_data(myelin_lbl, myelin_bw, axon_lbl, axon_bw, img_dat
     else:
         axon_table = get_morphos_for_axon_label_data(axon_region,axon_lbl,obj_table, axon_max_label,pad_size)
         
+    if not obj_table['status_ok'][0]:
+        return obj_table
+        
     obj_table['myelin_hole_area'] = obj_table['axon_area']
         
     myelin_filled_area = np.sum(myelin_bw_fill)
@@ -271,8 +276,17 @@ def get_morphos_for_axon_label_data(axon_bw_img, axon_lbl_img, obj_table, axon_m
     axon_bw_pad = np.pad(axon_bw_img_tmp, ((pad_size, pad_size), (pad_size, pad_size),), mode='constant', constant_values=0)
 
     # # convex hull calculation including smoothing to avoid pixelation effects
-    axon_min_box_corners, axon_min_box_edges, _ = bbox_from_BWimg(axon_bw_pad)
-
+    try:
+        axon_min_box_corners, axon_min_box_edges, _ = bbox_from_BWimg(axon_bw_pad)
+    except ValueError as ve:
+        obj_table['axon_area'] = 0
+        obj_table['axon_feret_max'] = 0
+        obj_table['axon_feret_min'] = 0
+        obj_table['axon_AR'] = 0
+        obj_table['status_ok'] = False
+        obj_table['error_msg'] = str(ve)
+        return obj_table
+        
     # # using the bbox as feret calculator and AR
     obj_table['axon_area'] = np.sum(axon_bw_pad)
     obj_table['axon_feret_max'] = np.max(axon_min_box_edges)

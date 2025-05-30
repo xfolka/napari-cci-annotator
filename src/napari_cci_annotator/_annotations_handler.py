@@ -56,16 +56,17 @@ class AnnotationsHandler:
         future = self.executor.submit(self._add_annotations, myelin_label_image, axon_label_image, data_image, napariViewer)
         return future
 
-    def _add_annotations(self, myelin_label_image, axon_label_image, data_image, napariViewer):
+    def _add_annotations(self, myelin_label_image, axon_label_image, data_image, progress_update_cb = None):
         self.clear_model()
 
         style = QApplication.style()
 
         cnt = 0
-        # gen = morpho_data_generator(myelin_label_image,axon_label_image, data_image)
+        gen = morpho_data_generator(myelin_label_image,axon_label_image, data_image)
+        tot_nr_labels = next(gen)
         # for i in range(20):
         #     data = next(gen)
-        for data in morpho_data_generator(myelin_label_image,axon_label_image, data_image):
+        for data in gen:
             if data.empty:
                 continue
             items = []
@@ -124,6 +125,9 @@ class AnnotationsHandler:
             self._ann_model.appendRow(items)
             print(f"adding {cnt} to model, status: {data['status_ok'][0]}")
             cnt += 1
+            
+            if progress_update_cb:
+                progress_update_cb(cnt,tot_nr_labels)
             
         self.set_headers()
         
