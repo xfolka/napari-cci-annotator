@@ -137,7 +137,6 @@ class CciAnnotatorQWidget(QWidget):
 
         read_ann_btn = QPushButton("Read annotations")
         read_ann_btn.clicked.connect(self._on_read_ann_btn_click)
-        
 
         mainLayout.addWidget(read_ann_btn)
         self.annotations_view.clicked.connect(self._click_annotation_id)
@@ -567,7 +566,6 @@ class CciAnnotatorQWidget(QWidget):
         
         return True, myelin_label_layer, axon_label_layer, image_layer
         
-
     def _on_read_ann_btn_click(self):
         
         res, myelin_label_layer, axon_label_layer, image_layer = self._check_layers_for_morpho()

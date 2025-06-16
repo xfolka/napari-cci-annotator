@@ -29,23 +29,23 @@ class AnnotationsHandler:
         # self.model().setColumnCount(8)
         self.set_headers()
         
-        
     def model(self):
         return self._proxy_model
         
     def set_headers(self):
         #self._ann_model.setColumnCount(6)
-        self.model().setHeaderData(0,Qt.Horizontal,"Myelin id", Qt.DisplayRole)
-        self.model().setHeaderData(1,Qt.Horizontal,"Axon id", Qt.DisplayRole)
-        self.model().setHeaderData(2,Qt.Horizontal,"X coord")
-        self.model().setHeaderData(3,Qt.Horizontal,"Y coord")
-        self.model().setHeaderData(4,Qt.Horizontal,"Area (px)")
-        self.model().setHeaderData(5,Qt.Horizontal,"# parts")
-        self.model().setHeaderData(6,Qt.Horizontal,"Axon area")
-        self.model().setHeaderData(7,Qt.Horizontal,"Axon calcu.")
-        self.model().setHeaderData(8,Qt.Horizontal,"status")
+        self.model().setHeaderData(0, Qt.Horizontal, "Myelin id", Qt.DisplayRole)
+        self.model().setHeaderData(1, Qt.Horizontal, "Axon id", Qt.DisplayRole)
+        self.model().setHeaderData(2, Qt.Horizontal, "X coord")
+        self.model().setHeaderData(3, Qt.Horizontal, "Y coord")
+        self.model().setHeaderData(4, Qt.Horizontal, "Area (px)")
+        self.model().setHeaderData(5, Qt.Horizontal, "# parts")
+        self.model().setHeaderData(6, Qt.Horizontal, "Axon area")
+        self.model().setHeaderData(7, Qt.Horizontal, "Axon calcu.")
+        self.model().setHeaderData(8, Qt.Horizontal, "status")
         
     def clear_model(self):
+        self._ann_model.clear()
         self._proxy_model.clear()
         self.set_headers()
         
@@ -56,7 +56,7 @@ class AnnotationsHandler:
         future = self.executor.submit(self._add_annotations, myelin_label_image, axon_label_image, data_image, napariViewer)
         return future
 
-    def _add_annotations(self, myelin_label_image, axon_label_image, data_image, progress_update_cb = None):
+    def _add_annotations(self, myelin_label_image, axon_label_image, data_image, progress_update_cb=None):
         self.clear_model()
 
         style = QApplication.style()
@@ -73,13 +73,10 @@ class AnnotationsHandler:
             myelin_label = data.myelin_label[0]
             myelinLabelItem = QStandardItem(str(myelin_label))
             myelinLabelItem.setData(myelin_label)
-            myelinLabelItem.setData(data, Qt.UserRole+2)
+            myelinLabelItem.setData(data, Qt.UserRole + 2)
             items.append(myelinLabelItem)
 
-            if data['status_ok'][0]:
-                axon_label = data['axon_label'][0]
-            else:
-                axon_label = "-"
+            axon_label = data['axon_label'][0] if data['status_ok'][0] else "-"
             axonLabelItem = QStandardItem(str(axon_label))
             axonLabelItem.setData(axon_label)
             items.append(axonLabelItem)
